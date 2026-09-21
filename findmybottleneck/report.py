@@ -105,7 +105,7 @@ def render(report: Report, show_sources: bool = True) -> None:
     else:
         print(dim("  everything this version knows how to read was read"))
     print()
-    print(dim("  whylow does not know whether the component is worth replacing, what anything"))
+    print(dim("  findmybottleneck does not know whether the component is worth replacing, what anything"))
     print(dim("  costs, or how another part would perform. It measures your machine running"))
     print(dim("  your game, and says what set the pace."))
     print()

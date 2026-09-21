@@ -1,4 +1,4 @@
-# whylow
+# findmybottleneck
 
 Your frame rate is low. Every tool on your screen shows you numbers: GPU 99%,
 CPU 34%, 61 °C. None of them tell you what to do about it.
@@ -8,14 +8,18 @@ and wait twelve hours for a stranger to interpret it. Asked directly whether
 any software can name a bottleneck, the answer on Tom's Hardware is one word:
 **no**.
 
-`whylow` records thirty seconds while you play, then says what set the pace and
+`findmybottleneck` records thirty seconds while you play, then says what set the pace and
 shows the numbers that produced the answer.
 
 ```
-whylow check
-whylow capture cs2.exe
-whylow explain
+pip install findmybottleneck
+
+fmb check
+fmb capture cs2.exe
+fmb explain
 ```
+
+`fmb` and `findmybottleneck` are the same command.
 
 ## What it says
 
@@ -79,13 +83,13 @@ measured** list, because "nothing found" is a claim about coverage.
 
 ## Hitches
 
-For every frame that took more than twice the median, whylow says what else was
+For every frame that took more than twice the median, findmybottleneck says what else was
 happening at that moment — a throttle, a disk stall, paging, graphics memory
 spilling into system RAM — and how many hitches nothing accounts for.
 
 This is labelled as coincidence, not causation, and the reason is honest: frame
 data arrives per frame, the counters arrive about once a second. A 95 ms frame
-next to a 45 ms disk read happened at the same time. That is what whylow
+next to a 45 ms disk read happened at the same time. That is what findmybottleneck
 claims, and no more.
 
 No tool in this category attempts this at all. They stop at the frame time
@@ -98,7 +102,7 @@ reads that file — including on a different machine, a different operating
 system, or someone else's laptop.
 
 ```
-whylow explain someone-elses-trace.json
+fmb explain someone-elses-trace.json
 ```
 
 That is the screenshot people already post on forums, except a program can read
@@ -109,7 +113,7 @@ it.
 - **Windows**, to capture. `explain` runs anywhere.
 - **An NVIDIA card**, for now, for the telemetry: throttle reasons, power,
   clocks, PCIe link. There is no command-line equivalent that ships with the
-  AMD or Intel consumer driver, so on those machines whylow reads frames and
+  AMD or Intel consumer driver, so on those machines findmybottleneck reads frames and
   Windows counters and says what it could not read.
 - **[PresentMon](https://github.com/GameTechDev/PresentMon)** (MIT), which is
   the only thing that can attribute a frame to the CPU or the GPU. Put
@@ -121,16 +125,28 @@ it.
   net localgroup "Performance Log Users" "%USERNAME%" /add
   ```
 
-  Sign out and back in. Nothing needs Administrator after that, and `whylow
-  check` prints this for you if it is missing.
+  Sign out and back in. Nothing needs Administrator after that, and `fmb check`
+  prints this for you if it is missing.
 
 Python 3.9 or newer. No dependencies.
+
+## Not a bottleneck calculator
+
+The sites that own this search term ask you for two model numbers and return a
+percentage. They never touch your machine, so they cannot see the memory
+running at a fallback speed, the card throttling on its power limit, or the
+link negotiated at x4 — which are the things that are actually wrong. Their
+output has no defined denominator, which is why a 7800X3D gets flagged as
+bottlenecking a 4070 Ti.
+
+findmybottleneck measures your machine, running your game, at your resolution,
+and shows the frame times that produced the answer.
 
 ## Where the method comes from
 
 The per-frame attribution is Intel PresentMon's `GPU Busy`, which is the method
 the enthusiast community converged on: if the frame took much longer than the
-GPU was busy, the GPU is not what held you back. whylow does not reinvent the
+GPU was busy, the GPU is not what held you back. findmybottleneck does not reinvent the
 measurement — it adds the attribution and the fix.
 
 Throttle reasons come from NVML's documented event reasons, memory speed from

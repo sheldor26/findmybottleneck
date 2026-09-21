@@ -1,4 +1,4 @@
-# whylow
+# findmybottleneck
 
 Records a Windows PC for thirty seconds while a game runs and then says what
 set the pace — the graphics card, the processor, a frame cap, or a stall — with
@@ -64,9 +64,9 @@ in the code, not an intention to be more careful next time.
 ## Commands
 
 ```bash
-python3 -m whylow check                    # what can be read on this machine
-python3 -m whylow capture cs2.exe          # record (Windows only)
-python3 -m whylow explain trace.json       # the verdict, anywhere
+python3 -m findmybottleneck check                    # what can be read on this machine
+python3 -m findmybottleneck capture cs2.exe          # record (Windows only)
+python3 -m findmybottleneck explain trace.json       # the verdict, anywhere
 python3 -m unittest discover -s tests -q   # the test suite
 node .bitacora/cli.mjs doctor              # is the logbook healthy?
 ```

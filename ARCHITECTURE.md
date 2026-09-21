@@ -7,15 +7,15 @@
 ## Shape
 
 ```
-whylow/collect/windows.py   every subprocess: nvidia-smi, typeperf, CIM, PresentMon
-whylow/trace.py             the trace: what a capture writes and a verdict reads
-whylow/engine/frames.py     what set the pace, frame by frame
-whylow/engine/config.py     what is wrong with the machine
-whylow/engine/hitch.py      why each spike happened
-whylow/engine/__init__.py   judge(trace) -> Report
-whylow/verdict.py           Verdict, Finding, Report
-whylow/report.py            everything that reaches the terminal
-whylow/data/sources.json    the published sentence behind every rule
+findmybottleneck/collect/windows.py   every subprocess: nvidia-smi, typeperf, CIM, PresentMon
+findmybottleneck/trace.py             the trace: what a capture writes and a verdict reads
+findmybottleneck/engine/frames.py     what set the pace, frame by frame
+findmybottleneck/engine/config.py     what is wrong with the machine
+findmybottleneck/engine/hitch.py      why each spike happened
+findmybottleneck/engine/__init__.py   judge(trace) -> Report
+findmybottleneck/verdict.py           Verdict, Finding, Report
+findmybottleneck/report.py            everything that reaches the terminal
+findmybottleneck/data/sources.json    the published sentence behind every rule
 ```
 
 The line that matters runs between `collect/` and `engine/`. They never call

@@ -98,7 +98,7 @@ class Hardware:
 @dataclass
 class Trace:
     schema: int = SCHEMA
-    whylow_version: str = "0.1.0"
+    findmybottleneck_version: str = "0.1.0"
     captured_at: str = ""
     duration_s: float = 0.0
     target: str = ""                          # the process that was watched
@@ -120,11 +120,11 @@ class Trace:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
         if raw.get("schema") != SCHEMA:
             raise ValueError(
-                f"this trace is schema {raw.get('schema')}, this whylow reads schema {SCHEMA}"
+                f"this trace is schema {raw.get('schema')}, this findmybottleneck reads schema {SCHEMA}"
             )
         return Trace(
             schema=raw["schema"],
-            whylow_version=raw.get("whylow_version", ""),
+            findmybottleneck_version=raw.get("findmybottleneck_version", ""),
             captured_at=raw.get("captured_at", ""),
             duration_s=raw.get("duration_s", 0.0),
             target=raw.get("target", ""),

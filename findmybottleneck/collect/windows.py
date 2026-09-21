@@ -6,7 +6,7 @@ trace under ``missing`` rather than swallowed — a verdict has to be able to sa
 "I did not measure this".
 
 Privilege: only PresentMon needs any, and it is the only thing that can
-attribute a frame to the CPU or the GPU. ``whylow check`` says so and prints
+attribute a frame to the CPU or the GPU. ``findmybottleneck check`` says so and prints
 the one command that fixes it.
 """
 
@@ -72,7 +72,7 @@ def find_presentmon(explicit: Optional[str] = None) -> Optional[str]:
         found = shutil.which(name)
         if found:
             return found
-    for base in (Path.cwd(), Path.home() / "Downloads", Path(os.environ.get("LOCALAPPDATA", "")) / "whylow"):
+    for base in (Path.cwd(), Path.home() / "Downloads", Path(os.environ.get("LOCALAPPDATA", "")) / "findmybottleneck"):
         if not base or not base.exists():
             continue
         for candidate in sorted(base.glob("PresentMon*.exe")):
@@ -103,7 +103,7 @@ def check() -> int:
         else:
             missing.append(("throttle reasons", "this driver exposes neither field name"))
     else:
-        missing.append(("nvidia-smi", "not found — whylow reads NVIDIA telemetry only, for now"))
+        missing.append(("nvidia-smi", "not found — findmybottleneck reads NVIDIA telemetry only, for now"))
 
     if shutil.which("typeperf"):
         ok.append("typeperf: present")
@@ -129,7 +129,7 @@ def check() -> int:
     print()
     if any(w in ("PresentMon", "PresentMon permission") for w, _ in missing):
         print("PresentMon is the only thing that can attribute a frame to the CPU or the GPU, so")
-        print("without it whylow can still find a misconfigured machine but cannot tell you what")
+        print("without it findmybottleneck can still find a misconfigured machine but cannot tell you what")
         print("set the pace. It needs your user to be in the Performance Log Users group. Once,")
         print("in an Administrator prompt:")
         print()
@@ -312,7 +312,7 @@ def _parse_typeperf(path: Path) -> Tuple[List[CpuSample], List[DiskSample], List
 def capture(args) -> int:
     seconds = max(5, int(args.seconds))
     out_path = Path(args.out)
-    workdir = out_path.parent / f".whylow-{int(time.time())}"
+    workdir = out_path.parent / f".fmb-{int(time.time())}"
     workdir.mkdir(parents=True, exist_ok=True)
 
     missing: Dict[str, str] = {}
@@ -328,7 +328,7 @@ def capture(args) -> int:
     if not presentmon:
         missing["frame attribution"] = "PresentMon was not found, so nothing could attribute a frame to the CPU or GPU"
     elif not target:
-        missing["frame attribution"] = "no process was given: whylow capture <game.exe>"
+        missing["frame attribution"] = "no process was given: findmybottleneck capture <game.exe>"
 
     gpu_csv, cpu_csv, frames_csv = workdir / "gpu.csv", workdir / "cpu.csv", workdir / "frames.csv"
     workers = []
@@ -402,6 +402,6 @@ def capture(args) -> int:
     print(f"{len(trace.frames)} frames, {len(trace.gpu)} gpu samples, {len(trace.cpu)} counter samples")
     print(f"written to {out_path}")
     print()
-    print(f"  whylow explain {out_path}")
+    print(f"  findmybottleneck explain {out_path}")
     print()
     return 0

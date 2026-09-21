@@ -1,4 +1,4 @@
-"""whylow — records your PC and names what is limiting your frame rate."""
+"""findmybottleneck — records your PC and names what is limiting your frame rate."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ __version__ = "0.1.0"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="whylow",
+        prog="findmybottleneck",
         description="Record a running game for a few seconds, then say what set the pace.",
     )
     sub = parser.add_subparsers(dest="command")
@@ -22,16 +22,16 @@ def build_parser() -> argparse.ArgumentParser:
     capture = sub.add_parser("capture", help="record a trace (Windows only)")
     capture.add_argument("process", nargs="?", help="the game's executable, e.g. cs2.exe")
     capture.add_argument("--seconds", type=int, default=30)
-    capture.add_argument("--out", default="whylow-trace.json")
+    capture.add_argument("--out", default="bottleneck-trace.json")
     capture.add_argument("--presentmon", help="path to PresentMon.exe, if it is not on PATH")
     capture.add_argument("--keep-csv", action="store_true", help="keep PresentMon's raw CSV beside the trace")
 
     explain = sub.add_parser("explain", help="read a trace and print the verdict")
-    explain.add_argument("trace", nargs="?", default="whylow-trace.json")
+    explain.add_argument("trace", nargs="?", default="bottleneck-trace.json")
     explain.add_argument("--json", action="store_true")
     explain.add_argument("--no-sources", action="store_true")
 
-    check = sub.add_parser("check", help="what whylow can and cannot read on this machine")
+    check = sub.add_parser("check", help="what findmybottleneck can and cannot read on this machine")
 
     parser.add_argument("--version", action="version", version=__version__)
     return parser
@@ -47,7 +47,7 @@ def main(argv=None) -> int:
 
         path = Path(args.trace)
         if not path.exists():
-            print(f"no trace at {path}. Record one with: whylow capture <game.exe>", file=sys.stderr)
+            print(f"no trace at {path}. Record one with: findmybottleneck capture <game.exe>", file=sys.stderr)
             return 2
         report = judge(Trace.read(path))
         if args.json:
@@ -60,7 +60,7 @@ def main(argv=None) -> int:
         if platform.system() != "Windows":
             print("capture only runs on Windows — the counters it reads do not exist elsewhere.",
                   file=sys.stderr)
-            print("You can still read a trace recorded on a Windows machine: whylow explain <trace>",
+            print("You can still read a trace recorded on a Windows machine: findmybottleneck explain <trace>",
                   file=sys.stderr)
             return 2
         from .collect.windows import capture as do_capture

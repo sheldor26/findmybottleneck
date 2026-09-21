@@ -20,12 +20,12 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from whylow.collect import windows
-from whylow.engine import SOURCES, judge
-from whylow.engine import config as cfg
-from whylow.engine.frames import analyse, classify, looks_capped
-from whylow.engine.hitch import summarise
-from whylow.trace import (DiskSample, Frame, GpuSample, Hardware, MemorySample,
+from findmybottleneck.collect import windows
+from findmybottleneck.engine import SOURCES, judge
+from findmybottleneck.engine import config as cfg
+from findmybottleneck.engine.frames import analyse, classify, looks_capped
+from findmybottleneck.engine.hitch import summarise
+from findmybottleneck.trace import (DiskSample, Frame, GpuSample, Hardware, MemorySample,
                           Trace)
 
 

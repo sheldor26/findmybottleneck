@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "whylow"
+name = "findmybottleneck"
 version = "0.1.0"
-description = "Records your PC for thirty seconds and names what is limiting your frame rate, with the evidence."
+description = "Finds the actual bottleneck on your PC: measured on your machine while you play, not calculated from a spec sheet."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -20,10 +20,12 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/sheldor26/whylow"
+Homepage = "https://github.com/sheldor26/findmybottleneck"
 
 [project.scripts]
-whylow = "whylow.cli:main"
+findmybottleneck = "findmybottleneck.cli:main"
+# The honest name is long to type, so the short one is there too.
+fmb = "findmybottleneck.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["whylow"]
+packages = ["findmybottleneck"]

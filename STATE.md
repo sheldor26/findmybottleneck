@@ -25,7 +25,7 @@ updated: 2026-09-21
 - Per-hitch attribution: for every frame past twice the median, what else was
   happening at that moment, labelled coincident rather than causal, with
   "unexplained" printed as a result.
-- `whylow check`, which says what this machine can and cannot be read for and
+- `findmybottleneck check`, which says what this machine can and cannot be read for and
   prints the one command that adds the user to Performance Log Users.
 - A Windows collector that shells out to nvidia-smi, typeperf, PowerShell CIM
   and PresentMon, records every probe that fails into the trace, and bundles
@@ -42,8 +42,8 @@ updated: 2026-09-21
 
 ## Next
 
-1. One real capture on the desktop with the NVIDIA card: `whylow check`, then
-   `whylow capture <game.exe> --keep-csv`. The raw CSVs are the point — the
+1. One real capture on the desktop with the NVIDIA card: `findmybottleneck check`, then
+   `findmybottleneck capture <game.exe> --keep-csv`. The raw CSVs are the point — the
    headers will say whether the column names, the throttle field name and the
    typeperf counter paths are what the documentation claims.
 2. Automate the resolution-drop test. Lowering the resolution and measuring
@@ -60,7 +60,7 @@ updated: 2026-09-21
 - NVIDIA only for telemetry. There is no command-line equivalent that ships
   with the AMD or Intel consumer driver — `amd-smi` is part of ROCm and
   documents Linux, `xpu-smi` is a separate install that documents data-centre
-  cards and needs Administrator. On those machines whylow gets frames and
+  cards and needs Administrator. On those machines findmybottleneck gets frames and
   Windows counters and nothing else, and has to say so.
 - The counters are sampled about once a second and a hitch lasts milliseconds,
   so hitch causes are coincidence, not causation. `typeperf` does not accept a

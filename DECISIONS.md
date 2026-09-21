@@ -9,6 +9,36 @@
 > Add entries with: `node .bitacora/cli.mjs new decision "Title" --tags area`
 
 <!-- bitacora:entry
+id: D-0007
+date: 2026-09-21
+tags: [naming]
+-->
+### Take the name the search term owns, and earn it
+
+**Context.** The tool was built as `whylow`. The word "bottleneck" is owned by a dozen
+sites that ask for two model numbers and return a percentage with no
+denominator — the exact thing this tool exists to be the opposite of. A
+thread on Linus Tech Tips settles it as its accepted answer: "Bottleneck
+calculators exist to sell more hardware, not to be an actually useful
+advisement tool." Taking the word risks being read as one of them before
+anyone sees the output.
+
+**Decision.** The name is findmybottleneck, with `fmb` as the short command, and the
+positioning is explicit rather than implied: the README has a section named
+"Not a bottleneck calculator" that says what those sites structurally cannot
+see — memory at a fallback speed, a card on its power limit, a link at x4 —
+and the package description leads with "measured on your machine while you
+play, not calculated from a spec sheet".
+
+**Consequences.** The tool now appears where people actually search, and the comparison it
+invites is one it wins on the merits, because the differentiator is that it
+touches the machine at all. The risk is real and accepted: a reader who
+recognises the word may dismiss it before reading, so the first screen of the
+README has to do the work of separating them. If that turns out to cost more
+than the search term is worth, the package can be renamed and the old name
+kept as an alias — nothing about the code depends on it.
+
+<!-- bitacora:entry
 id: D-0006
 date: 2026-09-21
 tags: [design]

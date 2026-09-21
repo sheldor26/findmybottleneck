@@ -19,5 +19,5 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - name: The collector at least imports and probes on Windows
         if: runner.os == 'Windows'
-        run: python -m whylow check
+        run: python -m findmybottleneck check
         continue-on-error: true

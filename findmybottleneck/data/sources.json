@@ -1,6 +1,6 @@
 {
   "captured_on": "2026-09-21",
-  "note": "Every verdict whylow prints cites one of these. A rule with no published source behind it is printed as a heuristic and says so.",
+  "note": "Every verdict findmybottleneck prints cites one of these. A rule with no published source behind it is printed as a heuristic and says so.",
   "methods": {
     "gpu_busy": {
       "url": "https://github.com/GameTechDev/PresentMon/blob/main/README-CaptureApplication.md",
