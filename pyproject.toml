@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "whylow"
+version = "0.1.0"
+description = "Records your PC for thirty seconds and names what is limiting your frame rate, with the evidence."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Juan Mirande" }]
+keywords = ["gaming", "performance", "bottleneck", "fps", "frametime", "presentmon", "nvidia", "diagnostics"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows",
+  "Topic :: System :: Benchmark",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/sheldor26/whylow"
+
+[project.scripts]
+whylow = "whylow.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["whylow"]

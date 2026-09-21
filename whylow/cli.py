@@ -1,0 +1,81 @@
+"""whylow — records your PC and names what is limiting your frame rate."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import platform
+import sys
+from dataclasses import asdict
+from pathlib import Path
+
+__version__ = "0.1.0"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="whylow",
+        description="Record a running game for a few seconds, then say what set the pace.",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    capture = sub.add_parser("capture", help="record a trace (Windows only)")
+    capture.add_argument("process", nargs="?", help="the game's executable, e.g. cs2.exe")
+    capture.add_argument("--seconds", type=int, default=30)
+    capture.add_argument("--out", default="whylow-trace.json")
+    capture.add_argument("--presentmon", help="path to PresentMon.exe, if it is not on PATH")
+    capture.add_argument("--keep-csv", action="store_true", help="keep PresentMon's raw CSV beside the trace")
+
+    explain = sub.add_parser("explain", help="read a trace and print the verdict")
+    explain.add_argument("trace", nargs="?", default="whylow-trace.json")
+    explain.add_argument("--json", action="store_true")
+    explain.add_argument("--no-sources", action="store_true")
+
+    check = sub.add_parser("check", help="what whylow can and cannot read on this machine")
+
+    parser.add_argument("--version", action="version", version=__version__)
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+
+    if args.command == "explain":
+        from .engine import judge
+        from .report import render
+        from .trace import Trace
+
+        path = Path(args.trace)
+        if not path.exists():
+            print(f"no trace at {path}. Record one with: whylow capture <game.exe>", file=sys.stderr)
+            return 2
+        report = judge(Trace.read(path))
+        if args.json:
+            print(json.dumps(asdict(report), indent=2))
+        else:
+            render(report, show_sources=not args.no_sources)
+        return 0
+
+    if args.command == "capture":
+        if platform.system() != "Windows":
+            print("capture only runs on Windows — the counters it reads do not exist elsewhere.",
+                  file=sys.stderr)
+            print("You can still read a trace recorded on a Windows machine: whylow explain <trace>",
+                  file=sys.stderr)
+            return 2
+        from .collect.windows import capture as do_capture
+        return do_capture(args)
+
+    if args.command == "check":
+        if platform.system() != "Windows":
+            print("This machine is not Windows, so there is nothing to check.")
+            return 0
+        from .collect.windows import check as do_check
+        return do_check()
+
+    build_parser().print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

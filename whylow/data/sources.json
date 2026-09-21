@@ -1,0 +1,31 @@
+{
+  "captured_on": "2026-09-21",
+  "note": "Every verdict whylow prints cites one of these. A rule with no published source behind it is printed as a heuristic and says so.",
+  "methods": {
+    "gpu_busy": {
+      "url": "https://github.com/GameTechDev/PresentMon/blob/main/README-CaptureApplication.md",
+      "quote": "GPU Busy: How long the GPU spent working on this frame. CPU Busy: How long the CPU was generating the frame. CPU Wait: How long the CPU spent waiting before it could start generating the frame.",
+      "note": "Frame time much longer than GPU Busy means something other than the GPU set the pace. This is Intel PresentMon's own metric and the method the enthusiast community has converged on."
+    },
+    "throttle_reasons": {
+      "url": "https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlClocksEventReasons.html",
+      "quote": "SwPowerCap: The clocks have been optimized to ensure not to exceed currently set power limits. HwSlowdown: temperature, power brake, or fast-trigger protection. HwThermalSlowdown. HwPowerBrakeSlowdown: external power brake asserted.",
+      "note": "Reported by nvidia-smi as clocks_event_reasons.* (clocks_throttle_reasons.* on older drivers), with per-reason duration counters in microseconds."
+    },
+    "memory_speed": {
+      "url": "https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-physicalmemory",
+      "quote": "ConfiguredClockSpeed: The configured clock speed of the memory device, in megahertz (MHz), or 0, if the speed is unknown.",
+      "note": "Speed is the module's rated figure from SMBIOS. ConfiguredClockSpeed below it is memory running at a JEDEC default because a memory profile was never enabled."
+    },
+    "pcie_link": {
+      "url": "https://man.archlinux.org/man/nvidia-smi.1.en",
+      "quote": "pcie.link.gen.current, pcie.link.gen.max, pcie.link.width.current, pcie.link.width.max",
+      "note": "A link reads narrow at idle because the GPU downtrains to save power. Only a sample taken under load means anything."
+    },
+    "disk_latency": {
+      "url": "https://learn.microsoft.com/en-us/previous-versions/dn567651(v=vs.85)",
+      "quote": "PhysicalDisk\\\\Avg. Disk sec/Read and Avg. Disk sec/Write report the average time, in seconds, of a read or write operation.",
+      "note": "Correlating a latency spike with a frame time spike is evidence, not proof: the sampling interval is coarser than a hitch."
+    }
+  }
+}
