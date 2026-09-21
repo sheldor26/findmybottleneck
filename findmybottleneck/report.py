@@ -13,6 +13,7 @@ import sys
 import textwrap
 from typing import List
 
+from .engine.compare import CompareResult
 from .verdict import Finding, Report
 
 _COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
@@ -49,6 +50,10 @@ def render(report: Report, show_sources: bool = True) -> None:
         for line in _wrap(verdict.fix):
             print(line)
         print()
+        if verdict.limiter in ("gpu", "cpu"):
+            print(dim("  To check this: capture again after lowering resolution or in-game settings,"))
+            print(dim("  then run: findmybottleneck compare <first trace> <second trace>"))
+            print()
         if report.secondary:
             print(dim("  it was not the same on every frame: " +
                       ", ".join(f"{v.limiter} on {round(v.share * 100)}%" for v in report.secondary)))
@@ -108,4 +113,25 @@ def render(report: Report, show_sources: bool = True) -> None:
     print(dim("  findmybottleneck does not know whether the component is worth replacing, what anything"))
     print(dim("  costs, or how another part would perform. It measures your machine running"))
     print(dim("  your game, and says what set the pace."))
+    print()
+
+
+AGREEMENT_LABEL = {
+    "confirms": green("confirms"),
+    "contradicts": red("contradicts"),
+    "inconclusive": yellow("inconclusive"),
+}
+
+
+def render_compare(result: CompareResult) -> None:
+    print()
+    print(bold(result.headline))
+    print(f"  {dim('·')} {AGREEMENT_LABEL[result.agreement]}")
+    print()
+    for line in result.evidence:
+        print(f"  {dim('·')} {line}")
+    if result.note:
+        print()
+        for line in _wrap(result.note):
+            print(line)
     print()

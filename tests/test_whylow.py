@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from findmybottleneck.collect import windows
 from findmybottleneck.engine import SOURCES, judge
 from findmybottleneck.engine import config as cfg
+from findmybottleneck.engine.compare import compare
 from findmybottleneck.engine.frames import analyse, classify, looks_capped
 from findmybottleneck.engine.hitch import summarise
 from findmybottleneck.trace import (DiskSample, Frame, GpuSample, Hardware, MemorySample,
@@ -271,6 +272,47 @@ class TraceFile(unittest.TestCase):
             path.write_text(json.dumps({"schema": 99}))
             with self.assertRaises(ValueError):
                 Trace.read(path)
+
+
+class Compare(unittest.TestCase):
+    """The resolution-drop test: a second capture confirms or contradicts the first."""
+
+    def test_cpu_bound_confirmed_when_fps_does_not_move(self):
+        before = Trace(frames=frames(200, 10.0, 4.0, 9.9))   # cpu-bound, 100 fps
+        after = Trace(frames=frames(200, 10.2, 4.0, 10.1))   # still cpu-bound, ~98 fps
+        result = compare(before, after)
+        self.assertEqual(result.agreement, "confirms")
+        self.assertIn("did not move", result.headline)
+
+    def test_cpu_bound_contradicted_when_fps_jumps(self):
+        before = Trace(frames=frames(200, 10.0, 4.0, 9.9))   # cpu-bound, 100 fps
+        after = Trace(frames=frames(200, 5.0, 4.9, 2.0))     # fps roughly doubled
+        result = compare(before, after)
+        self.assertEqual(result.agreement, "contradicts")
+
+    def test_gpu_bound_confirmed_when_fps_rises(self):
+        before = Trace(frames=frames(200, 10.0, 9.9, 4.0))   # gpu-bound, 100 fps
+        after = Trace(frames=frames(200, 5.0, 4.9, 2.0))     # lighter load, gpu-bound, ~200 fps
+        result = compare(before, after)
+        self.assertEqual(result.agreement, "confirms")
+        self.assertIn("rose", result.headline)
+
+    def test_gpu_bound_contradicted_when_fps_stays_flat(self):
+        before = Trace(frames=frames(200, 10.0, 9.9, 4.0))   # gpu-bound, 100 fps
+        after = Trace(frames=frames(200, 10.1, 10.0, 4.0))   # unchanged
+        result = compare(before, after)
+        self.assertEqual(result.agreement, "contradicts")
+
+    def test_a_frame_cap_is_inconclusive_rather_than_scored(self):
+        before = Trace(frames=frames(200, 16.67, 6.0, 5.0, sync=1))  # 60 fps cap
+        after = Trace(frames=frames(200, 16.67, 6.0, 5.0, sync=1))
+        result = compare(before, after)
+        self.assertEqual(result.agreement, "inconclusive")
+        self.assertIn("frame cap", result.headline)
+
+    def test_too_few_frames_is_inconclusive(self):
+        result = compare(Trace(frames=frames(3, 10, 9, 4)), Trace(frames=frames(200, 10, 9, 4)))
+        self.assertEqual(result.agreement, "inconclusive")
 
 
 if __name__ == "__main__":

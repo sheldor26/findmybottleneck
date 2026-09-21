@@ -9,6 +9,76 @@
 > Add entries with: `node .bitacora/cli.mjs new decision "Title" --tags area`
 
 <!-- bitacora:entry
+id: D-0009
+date: 2026-09-21
+tags: [design]
+-->
+### Skip the shared-VRAM counter - Microsoft documents it as unreliable
+
+**Context.** `STATE.md` named the `GPU Process Memory\Shared Usage` performance counter
+as the way to read spilled graphics memory without native code or admin
+rights, with the caveat that Microsoft publishes no reference for the counter
+set. A web search to fill that gap surfaced a Microsoft Learn support article
+titled "GPU Process Memory counters report incorrect value", describing known
+memory-leak-shaped bugs in that exact counter set on affected Windows
+versions, with Task Manager or WPA as the only reliable alternatives — neither
+of which this tool can shell out to and parse the way it does `nvidia-smi` or
+`typeperf`.
+
+**Decision.** Do not implement the shared-VRAM counter. `trace.py` already carries a
+`gpu_shared_mb` field and `engine/config.py` and `engine/hitch.py` already
+know what to do with it if it is ever populated, so nothing here is wasted —
+but the collector will not read it until a source exists that can be trusted
+the way every other rule in this project is trusted enough to cite.
+
+**Consequences.** This closes out `STATE.md`'s Next #3 without building a finding that could
+itself be the false accusation this tool exists to avoid — the exact trap
+D-0004 names for the PCIe link. The cost is that VRAM overflow is still
+only detected from `nvidia-smi`'s dedicated-memory reading
+(`engine/config.py::vram`), which misses the case where the driver has
+already started spilling and dedicated memory looks fine. If a reliable
+source for the counter set appears later, the schema is ready for it.
+
+<!-- bitacora:entry
+id: D-0008
+date: 2026-09-21
+tags: [design]
+-->
+### Automate the resolution-drop test as a compare command
+
+**Context.** `STATE.md` named the resolution-drop test as Next #2 and called it "the
+community's own gold standard for settling CPU-versus-GPU" while noting
+"nothing automates it." A web search across several sources confirmed the
+method and its interpretation: drop resolution or in-game settings, capture
+again, and if the frame rate barely moves the CPU was always the limit —
+giving the GPU less to do changed nothing because it never had the whole
+frame anyway. If the frame rate rises, the GPU was the limit. A single
+capture's per-frame attribution (D-0006, `engine/frames.py`) is an
+inference from one sample of reality; this test is the same claim checked
+experimentally, against a second sample.
+
+**Decision.** Add `engine/compare.py`, taking two already-captured traces and returning
+whether the second confirms or contradicts the first verdict, with an 8%
+fps-change tolerance named as judgement the same way every other threshold in
+`engine/` is. It reuses `frames.analyse` rather than re-deriving the verdict,
+and it says "inconclusive" for frame-cap, mixed, stall or unknown verdicts
+rather than forcing a confirm/contradict answer the test cannot actually give.
+Wired in as `findmybottleneck compare <before> <after>`, and surfaced as a
+one-line hint directly under a gpu/cpu verdict in `report.render()` so the
+feature is discoverable from the screen people already read, not only from
+`--help`.
+
+**Consequences.** A verdict is no longer only as strong as one capture's inference — someone can
+now falsify it, which is the difference between an opinion and a claim that
+can be argued with, in the same spirit as D-0006 labelling coincidence
+rather than proof. The cost is a workflow: this only helps someone who
+captures twice and remembers to lower something between the two runs, and the
+tool has no way to detect whether they actually did. If they didn't, and both
+captures are the same scene at the same settings, "contradicts" or "confirms"
+would follow from noise rather than from anything real. The wording is honest
+about this ("may not have been comparable") but cannot enforce it.
+
+<!-- bitacora:entry
 id: D-0007
 date: 2026-09-21
 tags: [naming]

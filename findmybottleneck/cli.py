@@ -31,6 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
     explain.add_argument("--json", action="store_true")
     explain.add_argument("--no-sources", action="store_true")
 
+    compare = sub.add_parser(
+        "compare", help="check a bottleneck verdict by comparing two captures (the resolution-drop test)")
+    compare.add_argument("before", help="the original capture")
+    compare.add_argument("after", help="a capture taken after lowering resolution or in-game settings")
+    compare.add_argument("--json", action="store_true")
+
     check = sub.add_parser("check", help="what findmybottleneck can and cannot read on this machine")
 
     parser.add_argument("--version", action="version", version=__version__)
@@ -54,6 +60,22 @@ def main(argv=None) -> int:
             print(json.dumps(asdict(report), indent=2))
         else:
             render(report, show_sources=not args.no_sources)
+        return 0
+
+    if args.command == "compare":
+        from .engine.compare import compare as do_compare
+        from .report import render_compare
+        from .trace import Trace
+
+        for label, raw in (("before", args.before), ("after", args.after)):
+            if not Path(raw).exists():
+                print(f"no trace at {raw} (the {label} capture)", file=sys.stderr)
+                return 2
+        result = do_compare(Trace.read(Path(args.before)), Trace.read(Path(args.after)))
+        if args.json:
+            print(json.dumps(asdict(result), indent=2))
+        else:
+            render_compare(result)
         return 0
 
     if args.command == "capture":

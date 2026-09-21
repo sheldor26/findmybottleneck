@@ -32,6 +32,11 @@ updated: 2026-09-21
   nothing.
 - 32 tests, standard library only: the engine against synthetic traces, the
   parsers against text shaped like what the real tools emit.
+- `findmybottleneck compare <before> <after>`, automating the community's own
+  resolution-drop test: a second capture either confirms or contradicts the
+  first verdict, with an honest "inconclusive" for frame-cap, mixed, stall or
+  unknown results. Surfaced as a hint under any gpu/cpu verdict so it is
+  discoverable without reading `--help`.
 
 ## In flight
 
@@ -46,14 +51,6 @@ updated: 2026-09-21
    `findmybottleneck capture <game.exe> --keep-csv`. The raw CSVs are the point — the
    headers will say whether the column names, the throttle field name and the
    typeperf counter paths are what the documentation claims.
-2. Automate the resolution-drop test. Lowering the resolution and measuring
-   again is the community's own gold standard for settling CPU-versus-GPU, it
-   is entirely manual today, and nothing automates it. It would turn the
-   verdict from an inference into an experiment.
-3. The shared-VRAM counter. The documented route needs native code; the
-   `GPU Process Memory\Shared Usage` performance counter appears to expose it
-   without privileges but Microsoft publishes no reference for the counter set,
-   so the names must be enumerated at runtime rather than hardcoded.
 
 ## Known rough edges
 
@@ -71,3 +68,7 @@ updated: 2026-09-21
 - The frame-cap detector, the stall threshold and the disk-stall threshold are
   judgement. They are named in one place per module and printed as judgement,
   but they are the most likely source of a wrong verdict.
+- The shared-VRAM counter is shelved, not planned. Microsoft's own docs
+  describe the `GPU Process Memory` counter set as reporting incorrect
+  values on affected Windows versions — see D-0009. `trace.py` already
+  has a field ready for it (`gpu_shared_mb`) if a trustworthy source appears.
