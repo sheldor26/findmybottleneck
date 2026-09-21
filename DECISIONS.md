@@ -9,6 +9,57 @@
 > Add entries with: `node .bitacora/cli.mjs new decision "Title" --tags area`
 
 <!-- bitacora:entry
+id: D-0015
+date: 2026-09-21
+tags: [capture, gui]
+-->
+### Capture until the target process exits instead of a fixed window
+
+**Context.** `capture` has always recorded a fixed `--seconds` window (30s
+by default). That is enough to name what set the pace right now, but the
+user's own framing was: the longer you sample, the steadier the 1% low,
+the throttle checks, and the hitch breakdown get — and asking someone to
+guess how many seconds their play session will last, upfront, is the wrong
+question. D-0014 (this session, earlier) already added the machinery this
+needs: `_process_running`/`_wait_for_target` to poll `tasklist` for a named
+process, already used to wait for a game to *start*. The same primitive
+answers "has it *stopped*".
+
+**Decision.** `--seconds 0` (CLI) or an empty/`0` Seconds field (GUI) means
+no fixed window: `run_capture` polls `_process_running(target)` every 0.5s
+and stops recording when the game closes, instead of racing a clock. This
+needs a target process — it falls back to a 30s capture with a `missing`
+entry if neither `process` nor `launch` is given, since there is nothing to
+detect the end of otherwise. The three collectors adapt the same way:
+`nvidia-smi` already polls until killed regardless of duration; `typeperf`
+drops its `-sc <count>` argument (a fixed sample count) so it logs until
+terminated; PresentMon drops `--timed`/`--terminate_after_timed` so it
+keeps writing until this process explicitly terminates it, mirroring how
+the other two workers are already stopped. `duration_s` in the resulting
+trace becomes the actual measured elapsed time, not the requested one — the
+distinction `report.py`/the engine already handle for `missing`, extended
+the same way here (say what actually happened, not what was asked for).
+Same session, this also closed a related but separate GUI-only bug
+(M-0003): the GUI wasn't wiring `run_capture`'s `on_wait` callback at all,
+so it showed "recording" during the wait-for-the-game-to-appear phase; that
+fix, and adding a "Launch" `.exe` picker to the Capture tab (the GUI half
+of D-0014's `--launch`, which only the CLI had until now), landed in the
+same pass as this feature because all three touch the same capture flow
+end to end.
+
+**Consequences.** A long capture is now one command instead of a guess at
+`--seconds`, and the statistics engine already reasons over "however many
+frames there are" rather than assuming exactly 30s of them, so nothing in
+`engine/` needed to change. The cost: an hour-long session at `typeperf`'s
+1s interval and PresentMon's per-frame rate is tens of thousands of CSV
+rows — untested against a real multi-hour run, same disclosed-gap pattern
+as the rest of this session's work (see **In flight** in STATE.md). There
+is deliberately no safety cap on how long unbounded mode can run — it stops
+when the game does, full stop; if a runaway capture from a game left open
+for days turns out to be a real problem, that's a new, separately-decided
+cap, not assumed here.
+
+<!-- bitacora:entry
 id: D-0014
 date: 2026-09-21
 tags: [collect, capture]
@@ -524,28 +575,9 @@ forgot they set — is now the one case it handles first. The cost is three
 thresholds that are judgement rather than measurement, so the verdict prints
 itself as a judgement.
 
-<!-- bitacora:entry
-id: D-0002
-date: 2026-09-21
-tags: [design]
--->
-### The collector and the engine meet only in a trace file
 
-**Context.** The machine this is built for runs Windows with a dedicated graphics card. The
-machine it is written on does not. Worse, the interesting failures — a card
-throttling, memory at a fallback speed, a link negotiated narrow — cannot be
-made to happen on demand even on the right machine.
+## Archived
 
-**Decision.** Capture writes one JSON file and stops. Everything that reasons about
-performance reads that file and never touches hardware. The reasoning is tested
-against traces; the reading is tested against text shaped like what the real
-tools emit.
+Older entries, one line each. `recall` still searches them in full.
 
-**Consequences.** The half that can be wrong in an interesting way — the reasoning — is testable
-anywhere, and the untested remainder shrinks to "do the three programs run and
-produce that text", which one real capture settles. It also makes a trace
-something a person can send: today someone with a stutter posts a screenshot of
-an overlay and waits for a stranger to interpret it, and a trace is that
-screenshot except a program can read it. The cost is a schema to keep
-compatible, and the discipline of never letting the engine reach for a live
-reading it is missing.
+- `D-0002` The collector and the engine meet only in a trace file — [design] → `docs/bitacora-archive/decisions-2026.md`

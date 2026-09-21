@@ -61,8 +61,18 @@ updated: 2026-09-21
   (default 120s, `0` disables it) bounds the wait; on timeout `capture`
   proceeds exactly as it already does when PresentMon or the target is
   missing — recording what it can and marking frame attribution `missing`
-  with the reason, not aborting. Shared by the GUI's `run_capture` call
-  unchanged (it doesn't pass `launch` yet).
+  with the reason, not aborting. The GUI's `run_capture` call now wires
+  `on_wait` too (M-0003 — it previously said "recording" while it was still
+  waiting for the process to appear), and the Capture tab now has a
+  "Launch" field + Browse button that passes `launch` the same way the CLI's
+  `--launch` does.
+- `capture --seconds 0` (CLI) or an empty/`0` Seconds field (GUI) records
+  until the target process exits instead of a fixed window (D-0015) — more
+  samples across a whole play session instead of a fixed 30s slice, so the
+  1% low, throttle checks and hitch breakdown all get steadier the longer
+  someone plays. Needs a target process to detect the end by; without one it
+  falls back to 30s. The GUI shows an indeterminate progress bar while
+  unbounded instead of a fraction it cannot compute.
 
 ## In flight
 
@@ -104,9 +114,17 @@ updated: 2026-09-21
   and its Report tab was checked against `report.py`'s own structure, but no
   one has actually seen the window — the user declined screen-control access
   when it was offered this session. Colours, layout, hover behaviour, whether
-  the progress bar reads well: all unverified. `python3 -m findmybottleneck
-  gui` (after `pip install findmybottleneck[gui]`) is the one thing that
-  would settle it.
+  the progress bar reads well, and now the new Launch field and the
+  indeterminate bar for unbounded capture: all unverified. `python3 -m
+  findmybottleneck gui` (after `pip install findmybottleneck[gui]`) is the
+  one thing that would settle it.
+- **`--seconds 0` / unbounded capture (D-0015) has never run against a real
+  game.** The argument-building (dropping `-sc`/`--timed`) and the
+  stop-on-exit loop are straightforward extensions of code already proven
+  against real PresentMon/typeperf this session, but nobody has watched an
+  hour-long trace actually get written and parsed end to end — whether the
+  CSVs stay well-formed at that row count, and whether `duration_s` ends up
+  reasonable, is unconfirmed.
 
 ## Next
 

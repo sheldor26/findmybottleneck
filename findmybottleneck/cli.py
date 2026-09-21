@@ -21,7 +21,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     capture = sub.add_parser("capture", help="record a trace (Windows only)")
     capture.add_argument("process", nargs="?", help="the game's executable, e.g. cs2.exe")
-    capture.add_argument("--seconds", type=int, default=30)
+    capture.add_argument("--seconds", type=int, default=30,
+                          help="0 records until the target process exits instead of a fixed window — "
+                               "more samples over a whole session, at the cost of a bigger trace")
     capture.add_argument("--out", default="bottleneck-trace.json")
     capture.add_argument("--presentmon", help="path to PresentMon.exe, if it is not on PATH")
     capture.add_argument("--keep-csv", action="store_true", help="keep PresentMon's raw CSV beside the trace")

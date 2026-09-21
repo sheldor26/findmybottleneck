@@ -68,6 +68,7 @@ class App(ctk.CTk):
 
         self._progress_queue: "queue.Queue" = queue.Queue()
         self._last_trace_path: Optional[Path] = None
+        self._progress_bar_indeterminate = False
 
         self._tabs = ctk.CTkTabview(self, corner_radius=12)
         self._tabs.pack(fill="both", expand=True, padx=16, pady=16)
@@ -130,11 +131,23 @@ class App(ctk.CTk):
                         values=_running_process_names() or ["cs2.exe"]).pack(
             side="left", fill="x", expand=True)
 
+        launch_row = ctk.CTkFrame(tab, fg_color="transparent")
+        launch_row.pack(fill="x", padx=8, pady=4)
+        ctk.CTkLabel(launch_row, text="Launch:", width=90, anchor="w").pack(side="left")
+        self._launch_var = ctk.StringVar()
+        ctk.CTkEntry(launch_row, textvariable=self._launch_var,
+                    placeholder_text="optional — leave blank to just wait for it").pack(
+            side="left", fill="x", expand=True)
+        ctk.CTkButton(launch_row, text="Browse…", width=80, hover_color=_ACCENT_HOVER,
+                     command=self._on_browse_launch).pack(side="left", padx=(6, 0))
+
         seconds_row = ctk.CTkFrame(tab, fg_color="transparent")
         seconds_row.pack(fill="x", padx=8, pady=4)
         ctk.CTkLabel(seconds_row, text="Seconds:", width=90, anchor="w").pack(side="left")
         self._seconds_var = ctk.StringVar(value="30")
         ctk.CTkEntry(seconds_row, textvariable=self._seconds_var, width=80).pack(side="left")
+        ctk.CTkLabel(seconds_row, text="0 = record until the game closes instead of a fixed window",
+                    text_color=_MUTED).pack(side="left", padx=(10, 0))
 
         self._capture_button = ctk.CTkButton(
             tab, text="Start capture" if is_windows else "Capture needs Windows",
@@ -154,27 +167,49 @@ class App(ctk.CTk):
         self._progress_label = ctk.CTkLabel(tab, text="", text_color=_MUTED)
         self._progress_label.pack(anchor="w", padx=8)
 
+    def _on_browse_launch(self) -> None:
+        path = filedialog.askopenfilename(title="Pick the game's .exe",
+                                          filetypes=[("Executable", "*.exe"), ("All files", "*.*")])
+        if not path:
+            return
+        self._launch_var.set(path)
+        if not self._process_var.get().strip():
+            self._process_var.set(Path(path).name)
+
     def _on_start_capture(self) -> None:
         process = self._process_var.get().strip()
-        if not process:
-            self._progress_label.configure(text="type or pick a game's .exe first")
+        launch = self._launch_var.get().strip() or None
+        if not process and not launch:
+            self._progress_label.configure(text="type or pick a game's .exe, or browse for one to launch")
             return
         try:
-            seconds = max(5, int(self._seconds_var.get()))
+            seconds = int(self._seconds_var.get())
         except ValueError:
             seconds = 30
+        if seconds > 0:
+            seconds = max(5, seconds)
 
-        self._capture_button.configure(state="disabled", text="Recording…")
+        self._capture_button.configure(state="disabled", text="Waiting…")
+        if self._progress_bar_indeterminate:
+            self._progress_bar.stop()
+            self._progress_bar.configure(mode="determinate")
+            self._progress_bar_indeterminate = False
         self._progress_bar.set(0)
-        self._progress_label.configure(text=f"recording {seconds}s of {process} — play normally")
+        target = process or Path(launch).name
+        wait_label = f"launching {target}…" if launch else f"waiting for {target} to start…"
+        self._progress_label.configure(text=wait_label)
 
         out_path = Path.cwd() / "bottleneck-trace.json"
 
-        def on_progress(elapsed: float, total: float) -> None:
+        def on_progress(elapsed: float, total: Optional[float]) -> None:
             self._progress_queue.put(("progress", elapsed, total))
 
+        def on_wait(elapsed: float) -> None:
+            self._progress_queue.put(("waiting", elapsed))
+
         def work() -> None:
-            trace, _ = run_capture(process, seconds, out_path, on_progress=on_progress)
+            trace, _ = run_capture(process, seconds, out_path, launch=launch,
+                                   on_progress=on_progress, on_wait=on_wait)
             self._progress_queue.put(("done", trace, out_path))
 
         threading.Thread(target=work, daemon=True).start()
@@ -185,10 +220,26 @@ class App(ctk.CTk):
         try:
             while True:
                 message = self._progress_queue.get_nowait()
-                if message[0] == "progress":
+                if message[0] == "waiting":
+                    _, elapsed = message
+                    self._progress_label.configure(text=f"waiting for the game to start… {int(elapsed)}s")
+                elif message[0] == "progress":
                     _, elapsed, total = message
-                    self._progress_bar.set(min(1.0, elapsed / total) if total else 0)
-                    self._progress_label.configure(text=f"{max(0, int(total - elapsed))}s left")
+                    self._capture_button.configure(text="Recording…")
+                    if total is None:
+                        if not self._progress_bar_indeterminate:
+                            self._progress_bar.configure(mode="indeterminate")
+                            self._progress_bar.start()
+                            self._progress_bar_indeterminate = True
+                        self._progress_label.configure(
+                            text=f"recording — {int(elapsed)}s so far, stops when the game closes")
+                    else:
+                        if self._progress_bar_indeterminate:
+                            self._progress_bar.stop()
+                            self._progress_bar.configure(mode="determinate")
+                            self._progress_bar_indeterminate = False
+                        self._progress_bar.set(min(1.0, elapsed / total) if total else 0)
+                        self._progress_label.configure(text=f"recording — {max(0, int(total - elapsed))}s left")
                 elif message[0] == "done":
                     _, trace, out_path = message
                     self._on_capture_done(trace, out_path)
@@ -200,6 +251,10 @@ class App(ctk.CTk):
 
     def _on_capture_done(self, trace: Trace, out_path: Path) -> None:
         self._capture_button.configure(state="normal", text="Start capture")
+        if self._progress_bar_indeterminate:
+            self._progress_bar.stop()
+            self._progress_bar.configure(mode="determinate")
+            self._progress_bar_indeterminate = False
         self._progress_bar.set(1.0)
         self._progress_label.configure(text=f"{len(trace.frames)} frames captured — see the Report tab")
         self._last_trace_path = out_path

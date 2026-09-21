@@ -372,7 +372,7 @@ def _wait_for_target(name: str, timeout: float,
 
 def run_capture(process: str, seconds: int, out_path: Path,
                 presentmon_path: Optional[str] = None, keep_csv: bool = False,
-                on_progress: Optional[Callable[[float, float], None]] = None,
+                on_progress: Optional[Callable[[float, Optional[float]], None]] = None,
                 launch: Optional[str] = None, wait_timeout: float = 120.0,
                 on_wait: Optional[Callable[[float], None]] = None) -> Tuple[Trace, Optional[Path]]:
     """Record a trace and write it to `out_path`. Returns the trace, and the
@@ -388,8 +388,17 @@ def run_capture(process: str, seconds: int, out_path: Path,
     way, once a target process name is known, recording waits for it to
     actually appear (D-0014) instead of counting down through a loading
     screen or an empty capture window.
+
+    `seconds <= 0` means no fixed window: recording runs for as long as
+    `target` stays alive instead of a fixed number of seconds, so a whole
+    play session becomes one trace instead of a 30s sample of it — more
+    frames behind the median, 1% low and throttle checks (D-0015). It needs
+    a target process to know when to stop; without one (no `process` and no
+    `launch`) it falls back to a 30s capture and says so under `missing`.
+    `on_progress` is called with `total=None` while unbounded, since there
+    is no total to report a fraction of.
     """
-    seconds = max(5, int(seconds))
+    unbounded = int(seconds) <= 0
     out_path = Path(out_path)
     workdir = out_path.parent / f".fmb-{int(time.time())}"
     workdir.mkdir(parents=True, exist_ok=True)
@@ -409,6 +418,13 @@ def run_capture(process: str, seconds: int, out_path: Path,
     elif not target:
         missing["frame attribution"] = "no process was given: findmybottleneck capture <game.exe>"
 
+    if unbounded and not target:
+        missing["duration"] = "no --seconds and no target process to stop on — recording 30s instead"
+        unbounded = False
+        seconds = 30
+    if not unbounded:
+        seconds = max(5, int(seconds))
+
     if launch:
         try:
             subprocess.Popen([launch], cwd=str(Path(launch).resolve().parent))
@@ -426,26 +442,46 @@ def run_capture(process: str, seconds: int, out_path: Path,
          "--format=csv,noheader,nounits", "-lms", "500", "-f", str(gpu_csv)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)]
 
-    workers.append(subprocess.Popen(
-        ["typeperf", *CPU_COUNTERS, "-si", "1", "-sc", str(seconds), "-f", "CSV", "-o", str(cpu_csv), "-y"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    typeperf_cmd = ["typeperf", *CPU_COUNTERS, "-si", "1"]
+    if not unbounded:
+        typeperf_cmd += ["-sc", str(seconds)]
+    typeperf_cmd += ["-f", "CSV", "-o", str(cpu_csv), "-y"]
+    workers.append(subprocess.Popen(typeperf_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
 
     presentmon_worker = None
     if presentmon and target:
+        presentmon_cmd = [presentmon, "--process_name", target]
+        if not unbounded:
+            presentmon_cmd += ["--timed", str(seconds), "--terminate_after_timed"]
+        presentmon_cmd += ["--output_file", str(frames_csv), "--no_console_stats"]
         presentmon_worker = subprocess.Popen(
-            [presentmon, "--process_name", target, "--timed", str(seconds),
-             "--terminate_after_timed", "--output_file", str(frames_csv), "--no_console_stats"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            presentmon_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 
     started = time.time()
-    while time.time() - started < seconds:
-        time.sleep(0.5)
-        if on_progress:
-            on_progress(time.time() - started, seconds)
+    if unbounded:
+        # No fixed window: stop when the game does, not on a clock (D-0015).
+        while _process_running(target):
+            time.sleep(0.5)
+            if on_progress:
+                on_progress(time.time() - started, None)
+    else:
+        while time.time() - started < seconds:
+            time.sleep(0.5)
+            if on_progress:
+                on_progress(time.time() - started, seconds)
+    actual_seconds = time.time() - started
 
     for worker in workers:
         worker.terminate()
     if presentmon_worker:
+        if unbounded:
+            # Bounded mode's PresentMon stops itself via --terminate_after_timed;
+            # unbounded mode has no timer, so it needs the same explicit stop the
+            # other two workers already get.
+            try:
+                presentmon_worker.terminate()
+            except OSError:
+                pass
         try:
             _, stderr = presentmon_worker.communicate(timeout=15)
             if presentmon_worker.returncode not in (0, None) and stderr:
@@ -456,7 +492,8 @@ def run_capture(process: str, seconds: int, out_path: Path,
 
     trace = Trace(
         captured_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        duration_s=float(seconds), target=target, hardware=hw, missing=missing,
+        duration_s=round(actual_seconds, 1) if unbounded else float(seconds),
+        target=target, hardware=hw, missing=missing,
     )
 
     if gpu_csv.exists():
@@ -486,21 +523,26 @@ def run_capture(process: str, seconds: int, out_path: Path,
 
 
 def capture(args) -> int:
-    seconds = max(5, int(args.seconds))
+    seconds = int(args.seconds)
+    unbounded = seconds <= 0
     launch = getattr(args, "launch", None)
     wait_timeout = getattr(args, "wait_timeout", 120.0)
     target = args.process or (Path(launch).name if launch else "")
 
     if launch:
         print(f"launching {launch}")
-    if target:
+    if unbounded and target:
+        print(f"waiting for {target} to start, then recording until it closes — play normally")
+    elif target:
         print(f"waiting for {target} to start, then recording {seconds}s — play normally")
     else:
         print(f"recording {seconds}s — play normally")
 
-    def on_progress(elapsed: float, total: float) -> None:
-        left = int(total - elapsed)
-        print(f"\r  {left:>3}s left ", end="", flush=True)
+    def on_progress(elapsed: float, total: Optional[float]) -> None:
+        if total is None:
+            print(f"\r  {int(elapsed):>5}s recorded, waiting for {target} to close ", end="", flush=True)
+        else:
+            print(f"\r  {int(total - elapsed):>3}s left ", end="", flush=True)
 
     def on_wait(elapsed: float) -> None:
         print(f"\r  waiting… {int(elapsed)}s ", end="", flush=True)
@@ -514,7 +556,7 @@ def capture(args) -> int:
         wait_timeout=wait_timeout,
         on_wait=on_wait,
     )
-    print("\r" + " " * 30 + "\r", end="")
+    print("\r" + " " * 60 + "\r", end="")
 
     if workdir is not None:
         print(f"raw csv kept in {workdir}")

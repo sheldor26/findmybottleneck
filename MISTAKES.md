@@ -7,6 +7,43 @@
 >
 > Add entries with: `node .bitacora/cli.mjs new mistake "Title" --tags area,failure-mode`
 <!-- bitacora:entry
+id: M-0003
+date: 2026-09-21
+tags: [gui, capture]
+severity: medium
+-->
+### GUI capture label said 'recording' during the wait-for-process phase
+
+**What happened.** The user started a capture from the GUI for `cs2.exe`
+while it was not actually running. `run_capture` (D-0014) correctly polled
+`tasklist` and waited for it to appear, but the GUI's `_on_start_capture`
+set the progress label to `"recording {seconds}s of {process} — play
+normally"` immediately on click and never wired `run_capture`'s `on_wait`
+callback. So for however long the wait lasted (up to the 120s default
+timeout), the window told the user a capture was in progress when nothing
+had been recorded yet — indistinguishable from the tool being stuck or
+broken. The CLI (`collect/windows.py::capture`) already had this right: it
+prints `"waiting for X to start…"` via `on_wait` before switching to a
+countdown, so the bug was GUI-only, introduced when D-0014 added the wait
+but only threaded `on_wait` through the CLI caller.
+
+**Root cause.** `run_capture` exposes two distinct phases through two
+different callbacks (`on_wait`, `on_progress`), and it is a caller's
+responsibility to render both. The GUI caller was written against the
+pre-D-0014 signature (progress only) and not updated when D-0014 added
+`on_wait` — nothing forced the second caller to catch up when the first one
+changed.
+
+**Guardrail.** Both `run_capture` callers (`collect/windows.py::capture` for
+the CLI, `gui/app.py::App._on_start_capture` for the GUI) must wire both
+`on_wait` and `on_progress`, not just one. There are only ever two callers
+of `run_capture`; before adding a third callback to its signature, or
+touching this pair, grep both `collect/windows.py` and `gui/app.py` for
+`run_capture(` and confirm every optional callback the function accepts is
+passed by both — a caller that silently no-ops on a new callback is exactly
+how this happened.
+
+<!-- bitacora:entry
 id: M-0002
 date: 2026-09-21
 tags: [collect, presentmon]
