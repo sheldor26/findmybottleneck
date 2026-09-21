@@ -345,9 +345,36 @@ def _parse_typeperf(path: Path) -> Tuple[List[CpuSample], List[DiskSample], List
     return cpu, disk, memory
 
 
+def _process_running(name: str) -> bool:
+    """Ask Windows directly whether `name` is running — the same
+    "shell out to what's already there" pattern as find_presentmon (D-0005),
+    not a new dependency (e.g. psutil)."""
+    _, out, _ = _run(["tasklist", "/fi", f"imagename eq {name}", "/fo", "csv", "/nh"], timeout=10)
+    return name.lower() in out.lower()
+
+
+def _wait_for_target(name: str, timeout: float,
+                     on_wait: Optional[Callable[[float], None]] = None) -> bool:
+    """Poll for `name` to appear in the process list, up to `timeout` seconds.
+    Returns whether it appeared. The caller records with whatever it has
+    either way, the same as every other probe in this module — a game that
+    never starts is not a crash, it's a `missing` entry."""
+    started = time.time()
+    while not _process_running(name):
+        elapsed = time.time() - started
+        if elapsed >= timeout:
+            return False
+        if on_wait:
+            on_wait(elapsed)
+        time.sleep(1.0)
+    return True
+
+
 def run_capture(process: str, seconds: int, out_path: Path,
                 presentmon_path: Optional[str] = None, keep_csv: bool = False,
-                on_progress: Optional[Callable[[float, float], None]] = None) -> Tuple[Trace, Optional[Path]]:
+                on_progress: Optional[Callable[[float, float], None]] = None,
+                launch: Optional[str] = None, wait_timeout: float = 120.0,
+                on_wait: Optional[Callable[[float], None]] = None) -> Tuple[Trace, Optional[Path]]:
     """Record a trace and write it to `out_path`. Returns the trace, and the
     workdir the raw CSVs were kept in if `keep_csv` was set (else `None`).
 
@@ -356,6 +383,11 @@ def run_capture(process: str, seconds: int, out_path: Path,
     GUI is another caller that drives the same recording with its own
     progress bar instead of a `\\r`-overwritten countdown. No new subprocess
     logic, no new parsing: this and `capture()` are one implementation.
+
+    If `launch` is given, that executable is started before recording. Either
+    way, once a target process name is known, recording waits for it to
+    actually appear (D-0014) instead of counting down through a loading
+    screen or an empty capture window.
     """
     seconds = max(5, int(seconds))
     out_path = Path(out_path)
@@ -371,11 +403,22 @@ def run_capture(process: str, seconds: int, out_path: Path,
         missing["throttle reasons"] = "this driver exposes neither clocks_event_reasons nor clocks_throttle_reasons"
 
     presentmon = find_presentmon(presentmon_path)
-    target = process or ""
+    target = process or (Path(launch).name if launch else "")
     if not presentmon:
         missing["frame attribution"] = "PresentMon was not found, so nothing could attribute a frame to the CPU or GPU"
     elif not target:
         missing["frame attribution"] = "no process was given: findmybottleneck capture <game.exe>"
+
+    if launch:
+        try:
+            subprocess.Popen([launch], cwd=str(Path(launch).resolve().parent))
+        except OSError as exc:
+            missing["launch"] = f"could not start {launch}: {exc}"
+
+    if target and presentmon and wait_timeout > 0 and not _process_running(target):
+        if not _wait_for_target(target, wait_timeout, on_wait):
+            missing["frame attribution"] = (
+                f"{target} never appeared within {int(wait_timeout)}s — nothing was recorded for it")
 
     gpu_csv, cpu_csv, frames_csv = workdir / "gpu.csv", workdir / "cpu.csv", workdir / "frames.csv"
     workers = [subprocess.Popen(
@@ -391,7 +434,7 @@ def run_capture(process: str, seconds: int, out_path: Path,
     if presentmon and target:
         presentmon_worker = subprocess.Popen(
             [presentmon, "--process_name", target, "--timed", str(seconds),
-             "--terminate_after_timed", "--output_file", str(frames_csv), "--no_top"],
+             "--terminate_after_timed", "--output_file", str(frames_csv), "--no_console_stats"],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 
     started = time.time()
@@ -444,20 +487,34 @@ def run_capture(process: str, seconds: int, out_path: Path,
 
 def capture(args) -> int:
     seconds = max(5, int(args.seconds))
-    target = args.process or ""
-    print(f"recording {seconds}s" + (f" of {target}" if target else "") + " — play normally")
+    launch = getattr(args, "launch", None)
+    wait_timeout = getattr(args, "wait_timeout", 120.0)
+    target = args.process or (Path(launch).name if launch else "")
+
+    if launch:
+        print(f"launching {launch}")
+    if target:
+        print(f"waiting for {target} to start, then recording {seconds}s — play normally")
+    else:
+        print(f"recording {seconds}s — play normally")
 
     def on_progress(elapsed: float, total: float) -> None:
         left = int(total - elapsed)
         print(f"\r  {left:>3}s left ", end="", flush=True)
 
+    def on_wait(elapsed: float) -> None:
+        print(f"\r  waiting… {int(elapsed)}s ", end="", flush=True)
+
     trace, workdir = run_capture(
-        target, seconds, Path(args.out),
+        args.process, seconds, Path(args.out),
         presentmon_path=getattr(args, "presentmon", None),
         keep_csv=getattr(args, "keep_csv", False),
         on_progress=on_progress,
+        launch=launch,
+        wait_timeout=wait_timeout,
+        on_wait=on_wait,
     )
-    print("\r" + " " * 20 + "\r", end="")
+    print("\r" + " " * 30 + "\r", end="")
 
     if workdir is not None:
         print(f"raw csv kept in {workdir}")
@@ -508,7 +565,7 @@ def run_overlay(args) -> int:
         frames_csv = workdir / "frames.csv"
 
         presentmon_worker = subprocess.Popen(
-            [presentmon, "--process_name", target, "--output_file", str(frames_csv), "--no_top"],
+            [presentmon, "--process_name", target, "--output_file", str(frames_csv), "--no_console_stats"],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 
         window_s = float(getattr(args, "window_seconds", 3.0))

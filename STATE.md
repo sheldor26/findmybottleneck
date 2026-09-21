@@ -54,13 +54,33 @@ updated: 2026-09-21
   `engine.judge` the CLI already calls; `check()`/`capture()` were each split
   into a data-returning core and a thin CLI printer so both callers share one
   implementation.
+- `findmybottleneck capture` now waits for the target process to actually
+  appear before starting the timed recording, instead of counting down blind
+  (D-0014), and can launch it itself with `--launch <path>` so "is the game
+  actually running" is guaranteed rather than hoped for. `--wait-timeout`
+  (default 120s, `0` disables it) bounds the wait; on timeout `capture`
+  proceeds exactly as it already does when PresentMon or the target is
+  missing — recording what it can and marking frame attribution `missing`
+  with the reason, not aborting. Shared by the GUI's `run_capture` call
+  unchanged (it doesn't pass `launch` yet).
 
 ## In flight
 
-- **The collector has never run.** It is written against documented flags and
-  field names and parses text shaped like the real output, but no line of it
-  has executed on a Windows machine. That is the one thing a test suite here
-  cannot settle.
+- **The collector has run for real for the first time this session** — the
+  Windows machine used to build `--launch`/auto-wait above has an NVIDIA
+  card and a real PresentMon 2.6.0 binary. It immediately surfaced a real bug
+  (M-0002, now fixed): PresentMon 2.6.0 rejects `--no_top`, which both
+  `capture` and `overlay` were passing; PresentMon 2.x's actual flag is
+  `--no_console_stats`. nvidia-smi and PresentMon's own `--help`/argument
+  parsing are now confirmed against a real binary. Still unconfirmed by a
+  real capture: the synthetic smoke test used `notepad.exe` (launched, then
+  killed) as a stand-in target — it never presents a frame, so it says
+  nothing about whether `_parse_presentmon`'s column names match a real
+  capture's CSV, and `typeperf` wrote nothing in that same run (unexplained —
+  worth checking who cwd/permissions were on that machine before assuming
+  it's a real bug, since `findmybottleneck check` on the same machine reports
+  `typeperf: present`). Item 1 below (a real game, not a stand-in) is what
+  actually settles this.
 - **`rtss.py` has never talked to a real RTSS.** Its byte-offset math is unit
   tested against a synthetic buffer, and `parse_header` rejects corrupt or
   undersized geometry, including a single corrupted offset/size/count field,

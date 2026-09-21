@@ -25,6 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--out", default="bottleneck-trace.json")
     capture.add_argument("--presentmon", help="path to PresentMon.exe, if it is not on PATH")
     capture.add_argument("--keep-csv", action="store_true", help="keep PresentMon's raw CSV beside the trace")
+    capture.add_argument("--launch", help="path to the game's .exe; findmybottleneck starts it for you")
+    capture.add_argument("--wait-timeout", type=float, default=120.0,
+                          help="seconds to wait for the process to appear before recording anyway (0 disables waiting)")
 
     explain = sub.add_parser("explain", help="read a trace and print the verdict")
     explain.add_argument("trace", nargs="?", default="bottleneck-trace.json")

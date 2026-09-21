@@ -6,3 +6,6 @@ build/
 .DS_Store
 .venv/
 traces/
+.fmb-*/
+bottleneck-trace.json
+tools/

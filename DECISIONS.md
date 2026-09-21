@@ -9,6 +9,51 @@
 > Add entries with: `node .bitacora/cli.mjs new decision "Title" --tags area`
 
 <!-- bitacora:entry
+id: D-0014
+date: 2026-09-21
+tags: [collect, capture]
+-->
+### Wait for the target process before recording, and let capture launch it
+
+**Context.** Juan asked for `capture` to start recording automatically once it detects the
+game is open, and to optionally launch the game itself so that is guaranteed
+rather than hoped for. Before this, `capture <game.exe>` started its 30s
+countdown the instant it ran — timing it against alt-tabbing into a loading
+game, or typing the command a beat too early, produced a trace with an
+empty or near-empty frame set and no real signal about why.
+
+**Decision.** `run_capture` gained two independent, composable additions, both built on the
+GUI's existing `tasklist`-shelling pattern (D-0005) rather than a new
+dependency (`psutil` would be the obvious alternative — rejected under
+CLAUDE.md's "no new dependency without asking" for something `tasklist`
+already answers): (1) an optional `launch` path, `Popen`'d before recording,
+with the target process name defaulted from its filename when `process`
+isn't given explicitly; (2) whenever a target name is known, recording waits
+(polling once a second, `--wait-timeout`, default 120s) for that name to
+actually appear in the process list before starting the timed capture,
+instead of starting blind. If the process never appears in time, `capture`
+does not abort — it proceeds exactly as it already does when PresentMon or
+the target is missing, recording hardware/counters and marking frame
+attribution as `missing` with the reason, honest rather than a hard failure.
+The wait is skipped entirely when there is no PresentMon to attribute frames
+with anyway (waiting buys nothing in that case) or when `--wait-timeout 0` is
+passed.
+
+**Consequences.** `findmybottleneck capture cs2.exe` now works whether cs2.exe is already
+running or about to be started by hand, and `--launch <path>` covers the
+"make sure it's running" case directly. The cost: `--launch` only starts the
+process and does not manage its lifecycle (it is not terminated after the
+capture, and a launcher stub — Steam launching a different real game
+process — is not resolved automatically; the caller can still pass an
+explicit `process` name to attribute frames to the real child process while
+`--launch`ing the stub). The wait loop adds up to `--wait-timeout` seconds of
+real wall-clock time before recording starts, which `capture`'s own status
+line reports so it never looks hung. `run_capture` is shared with the GUI
+(D-0013); the GUI does not pass `launch` or `on_wait` yet, so its existing
+flow (pick an already-running process from the dropdown) is unaffected — the
+wait resolves on the very first check when the process is already up.
+
+<!-- bitacora:entry
 id: D-0013
 date: 2026-09-21
 tags: [design]

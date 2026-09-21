@@ -7,6 +7,41 @@
 >
 > Add entries with: `node .bitacora/cli.mjs new mistake "Title" --tags area,failure-mode`
 <!-- bitacora:entry
+id: M-0002
+date: 2026-09-21
+tags: [collect, presentmon]
+severity: high
+-->
+### PresentMon 2.6.0 rejects the --no_top flag capture/overlay pass it
+
+**What happened.** `run_capture` and `run_overlay` both invoke PresentMon with `--no_top`, a flag
+meant to suppress its live console table. Running `capture` for real for the
+first time (adding `--launch`/auto-wait to `capture`, this session) against a
+real PresentMon 2.6.0 binary, downloaded fresh from the project's own README
+link, PresentMon exited immediately with `error: unrecognized option
+'--no_top'.` — every capture and every overlay session failed before writing
+a single frame, silently recorded as "PresentMon exited with an error" in
+`missing`, which is easy to read as a permissions problem rather than a
+wrong flag. Fixed to `--no_console_stats`, PresentMon's 2.x name for the same
+thing per its own `--help` output.
+
+**Root cause.** STATE.md already named this precisely under "In flight": *"The collector has
+never run… no line of it has executed on a Windows machine."* The flag was
+written against memory/documentation of PresentMon's CLI, not against a real
+binary's `--help`, and PresentMon has no stable versioned flag API — `--help`
+on 2.6.0 lists neither `--no_top` nor any deprecation notice for it, it is
+simply gone. Nothing in the test suite could have caught this: `_parse_presentmon`
+is tested against synthetic CSV text, never against the subprocess invocation
+itself, by design (D-0005's tests-the-parser-not-the-shelling-out split).
+
+**Guardrail.** Before changing or adding a PresentMon (or any shelled-out tool's) command-line
+flag, run that exact binary with `--help` and confirm the flag is listed —
+do not carry a flag forward from memory, an older version's docs, or a
+different PresentMon build. `findmybottleneck check` already prints the
+resolved PresentMon path; the check before touching its invocation is one
+command: `<presentmon-path> --help`.
+
+<!-- bitacora:entry
 id: M-0001
 date: 2026-09-21
 tags: [engine, testing]
