@@ -22,6 +22,11 @@
       "quote": "pcie.link.gen.current, pcie.link.gen.max, pcie.link.width.current, pcie.link.width.max",
       "note": "A link reads narrow at idle because the GPU downtrains to save power. Only a sample taken under load means anything."
     },
+    "cpu_performance": {
+      "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/performance/cpu-usage-exceeds-100",
+      "quote": "A processor that's running 100% of the time and clocked down to 50% frequency performs only half the work of a processor that's running 100% of the time at 100% frequency.",
+      "note": "% Processor Performance measures work done relative to the processor's nominal (rated) frequency. Above 100% is Turbo Boost; a value well below 100% while the processor is fully loaded means it is doing less work than its rating promises — held back by a thermal or power limit, not by having nothing to do."
+    },
     "disk_latency": {
       "url": "https://learn.microsoft.com/en-us/previous-versions/dn567651(v=vs.85)",
       "quote": "PhysicalDisk\\\\Avg. Disk sec/Read and Avg. Disk sec/Write report the average time, in seconds, of a read or write operation.",

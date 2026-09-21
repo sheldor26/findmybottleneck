@@ -22,6 +22,15 @@ THROTTLE_SHARE = 0.10
 DISK_STALL_S = 0.020
 # GPU memory this close to full, with spill present, is an overflow.
 VRAM_FULL = 0.95
+# % Processor Time at or above this counts as the processor being under load —
+# below it, a low % Processor Performance is normal frequency scaling to save
+# power, not throttling, and means nothing.
+CPU_BUSY_PERCENT = 80
+# Below this share of its rated (nominal) clock, a busy processor is being
+# held back rather than just not boosting.
+CPU_PERFORMANCE_FLOOR = 0.85
+# This share of busy samples held back is worth reporting.
+CPU_THROTTLE_SHARE = 0.20
 
 
 def _cite(trace_sources: dict, key: str) -> Dict[str, str]:
@@ -114,6 +123,44 @@ def throttling(trace: Trace, sources: dict) -> List[Finding]:
             evidence=evidence, fix=fix, **cite,
         ))
     return found
+
+
+def cpu_throttling(trace: Trace, sources: dict) -> List[Finding]:
+    """Every score-ratio site only ever asks the GPU whether it is throttled.
+
+    Only samples where the processor was actually busy mean anything here —
+    the same rule as the PCIe link (D-0004): a metric that is only meaningful
+    under load is judged only from samples taken under load. An idle processor
+    runs below its rated clock on purpose, to save power, and that is not a
+    finding.
+    """
+    if not trace.cpu:
+        return []
+    busy = [s for s in trace.cpu
+            if (s.total or 0) >= CPU_BUSY_PERCENT and s.processor_performance is not None]
+    if not busy:
+        return []
+    held_back = [s for s in busy if s.processor_performance < CPU_PERFORMANCE_FLOOR * 100]
+    share = len(held_back) / len(busy)
+    if share < CPU_THROTTLE_SHARE:
+        return []
+    perf = [s.processor_performance for s in held_back]
+    median_perf = round(statistics.median(perf))
+    return [Finding(
+        severity="high" if share > 0.5 else "medium",
+        title=f"Your processor is running at {median_perf}% of its rated clock while fully loaded, "
+              f"in {round(share * 100)}% of the busy samples",
+        evidence=[
+            f"{len(held_back)} of {len(busy)} samples with % Processor Time at or above "
+            f"{CPU_BUSY_PERCENT}% were below {round(CPU_PERFORMANCE_FLOOR * 100)}% of nominal performance",
+            f"median {median_perf}% of nominal, lowest {round(min(perf))}%",
+        ],
+        fix="This is a processor being held back, not one with nothing to do. Check Power Options → "
+            "Processor power management → Maximum processor state (a common laptop default caps it "
+            "below 100%), and check temperatures under load — this is thermal throttling on most "
+            "laptops and small-form-factor machines.",
+        **_cite(sources, "cpu_performance"),
+    )]
 
 
 def pcie_link(trace: Trace, sources: dict) -> List[Finding]:

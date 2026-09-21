@@ -26,7 +26,7 @@ from findmybottleneck.engine import config as cfg
 from findmybottleneck.engine.compare import compare
 from findmybottleneck.engine.frames import analyse, classify, looks_capped
 from findmybottleneck.engine.hitch import summarise
-from findmybottleneck.trace import (DiskSample, Frame, GpuSample, Hardware, MemorySample,
+from findmybottleneck.trace import (CpuSample, DiskSample, Frame, GpuSample, Hardware, MemorySample,
                           Trace)
 
 
@@ -117,6 +117,25 @@ class Configuration(unittest.TestCase):
     def test_gpu_idle_is_never_reported_as_a_problem(self):
         trace = Trace(gpu=[GpuSample(i, throttle={"gpu_idle": True}) for i in range(10)])
         self.assertEqual(cfg.throttling(trace, SOURCES), [])
+
+    def test_a_fully_loaded_cpu_running_below_its_rated_clock_is_reported(self):
+        trace = Trace(cpu=[CpuSample(i, total=95, processor_performance=60) for i in range(10)])
+        found = cfg.cpu_throttling(trace, SOURCES)
+        self.assertEqual(found[0].severity, "high")
+        self.assertIn("60%", found[0].title)
+
+    def test_a_fully_loaded_cpu_at_its_rated_clock_is_silent(self):
+        trace = Trace(cpu=[CpuSample(i, total=95, processor_performance=100) for i in range(10)])
+        self.assertEqual(cfg.cpu_throttling(trace, SOURCES), [])
+
+    def test_a_boosted_cpu_above_100_percent_is_silent(self):
+        trace = Trace(cpu=[CpuSample(i, total=95, processor_performance=140) for i in range(10)])
+        self.assertEqual(cfg.cpu_throttling(trace, SOURCES), [])
+
+    def test_an_idle_cpu_running_slow_is_never_reported_as_throttled(self):
+        """Frequency scaling down at idle to save power is normal, not a fault."""
+        trace = Trace(cpu=[CpuSample(i, total=8, processor_performance=15) for i in range(10)])
+        self.assertEqual(cfg.cpu_throttling(trace, SOURCES), [])
 
     def test_a_narrow_link_under_load_is_reported(self):
         trace = Trace(gpu=[GpuSample(i, utilisation=97, pcie_width=4, pcie_width_max=16)

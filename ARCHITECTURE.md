@@ -10,7 +10,7 @@
 findmybottleneck/collect/windows.py   every subprocess: nvidia-smi, typeperf, CIM, PresentMon
 findmybottleneck/trace.py             the trace: what a capture writes and a verdict reads
 findmybottleneck/engine/frames.py     what set the pace, frame by frame
-findmybottleneck/engine/config.py     what is wrong with the machine
+findmybottleneck/engine/config.py     what is wrong with the machine (memory, throttling, VRAM, PCIe)
 findmybottleneck/engine/hitch.py      why each spike happened
 findmybottleneck/engine/compare.py    a second trace confirms or contradicts the first verdict
 findmybottleneck/engine/__init__.py   judge(trace) -> Report

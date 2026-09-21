@@ -9,6 +9,46 @@
 > Add entries with: `node .bitacora/cli.mjs new decision "Title" --tags area`
 
 <!-- bitacora:entry
+id: D-0010
+date: 2026-09-21
+tags: [design]
+-->
+### Judge CPU throttling the same way GPU throttling is judged
+
+**Context.** Juan asked to look at how other tools detect bottlenecks and find something
+this project wasn't doing yet. `engine/config.py::throttling` already checks
+whether the GPU is being held back by power or temperature, cited from
+nvidia-smi's own clocks-event-reasons. Nothing here ever asked the same
+question of the processor, even though `collect/windows.py` already requests
+`\Processor Information(_Total)\% Processor Performance` and `trace.py`
+already carries it on every `CpuSample` — the data was collected and unused.
+A Microsoft support article on why Task Manager can show CPU usage over 100%
+gives the exact mechanism in one sentence: "a processor that's running 100%
+of the time and clocked down to 50% frequency performs only half the work."
+
+**Decision.** Add `engine/config.py::cpu_throttling`, gated the same way the PCIe link
+finding is gated (D-0004): only samples where `% Processor Time` is at or
+above 80% count, because a low `% Processor Performance` at idle is the
+processor correctly downclocking to save power, not a fault. Within busy
+samples, a share below 85% of nominal clock is reported as the processor
+being held back — laptop power plans capping "Maximum processor state" and
+thermal throttling being the two real-world causes named in the fix text.
+
+**Consequences.** This is the CPU-side twin of the GPU throttling finding, and it was buildable
+today because the collector already gathered the counter — the gap was only
+in `engine/`, not in `collect/`. It also closes a real blind spot: a "your
+processor is setting the pace" verdict previously had no way to say *why* the
+processor was slow, and "waiting on memory" (D-0004's neighbour, the memory
+Finding) was the only explanation this tool could offer. Now a throttled
+clock is a second, independent explanation, with its own evidence. The
+research also turned up two bigger, unbuilt ideas worth keeping — DPC/ISR
+latency (the LatencyMon method, needs an ETW capture this project doesn't
+have) and per-process `GPU Engine` counters (catching a background app
+stealing the 3D engine) — both left for `STATE.md`'s **Next**, not built now,
+because both need new collection code rather than reading data already in
+hand.
+
+<!-- bitacora:entry
 id: D-0009
 date: 2026-09-21
 tags: [design]

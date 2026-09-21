@@ -25,6 +25,7 @@ def judge(trace: Trace) -> Report:
     report.findings = (
         config.memory(trace, SOURCES)
         + config.throttling(trace, SOURCES)
+        + config.cpu_throttling(trace, SOURCES)
         + config.vram(trace, SOURCES)
         + config.pcie_link(trace, SOURCES)
     )

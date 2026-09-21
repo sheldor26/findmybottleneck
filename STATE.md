@@ -19,9 +19,11 @@ updated: 2026-09-21
   0.1% low.
 - Configuration findings: memory below its rated speed, a single module or a
   single populated channel, GPU throttling by power limit or temperature with
-  the measured watts and degrees, graphics memory full and spilling, and a
-  PCIe link narrower or slower than the card supports — judged only from
-  samples taken while the GPU was busy.
+  the measured watts and degrees, CPU throttling (rated clock vs measured
+  clock while the processor is fully loaded — the same load-gated pattern as
+  the GPU check), graphics memory full and spilling, and a PCIe link narrower
+  or slower than the card supports — judged only from samples taken while the
+  component was busy.
 - Per-hitch attribution: for every frame past twice the median, what else was
   happening at that moment, labelled coincident rather than causal, with
   "unexplained" printed as a result.
@@ -51,6 +53,17 @@ updated: 2026-09-21
    `findmybottleneck capture <game.exe> --keep-csv`. The raw CSVs are the point — the
    headers will say whether the column names, the throttle field name and the
    typeperf counter paths are what the documentation claims.
+2. DPC/ISR latency (the method LatencyMon uses): a driver holding the CPU in
+   an interrupt handler too long causes exactly the stutter this tool already
+   tries to explain in the hitch breakdown, and today it cannot see it —
+   `engine/hitch.py` only looks at GPU, disk and memory samples. Needs an ETW
+   kernel-logger capture (`xperf` or the Windows Performance Recorder), which
+   is a new collection dependency, not just a new engine rule.
+3. Per-process `GPU Engine` counters, to catch a background app (a browser,
+   Discord, OBS) competing for the 3D engine while the game runs. The counter
+   is readable via typeperf without admin rights, but the instances are keyed
+   by PID and engine type and nothing here parses indexed typeperf instances
+   yet — `_parse_typeperf` only reads `(_Total)` and fixed per-core columns.
 
 ## Known rough edges
 
