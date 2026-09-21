@@ -13,7 +13,7 @@ SOURCES = json.loads((Path(__file__).parent.parent / "data" / "sources.json").re
 
 
 def judge(trace: Trace) -> Report:
-    report = Report()
+    report = Report(notes=trace.notes)
     verdict, secondary, stats, hitch_indices = frames.analyse(trace.frames)
     usable = [f for f in trace.frames if f.frame_time > 0]
 
@@ -28,6 +28,7 @@ def judge(trace: Trace) -> Report:
         + config.cpu_throttling(trace, SOURCES)
         + config.vram(trace, SOURCES)
         + config.pcie_link(trace, SOURCES)
+        + config.background_gpu(trace)
     )
 
     if not trace.frames:

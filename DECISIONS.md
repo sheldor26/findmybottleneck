@@ -9,6 +9,246 @@
 > Add entries with: `node .bitacora/cli.mjs new decision "Title" --tags area`
 
 <!-- bitacora:entry
+id: D-0020
+date: 2026-09-21
+tags: [gui, collect, engine]
+-->
+### Ship 8 of the 12 approved companion-tool ideas; skip 4 for real reasons, not just less rigor
+
+**Context.** Juan asked for 20 companion-tool ideas, then approved building 14 of them (excluding
+a VRR detector with no Windows API and a shareable-card feature needing
+Pillow, both declined upfront), accepting less test rigor than the rest of
+this session in exchange for speed. Working through them individually
+surfaced that "less rigor" and "build it anyway" are not always compatible
+— two ideas hit a hard floor this project does not cross regardless of
+time pressure.
+
+**Decision.** Shipped, each with real (if lighter than usual) verification: **config_audit()** +
+**disk_health()** (power plan, HAGS, Game Mode, Memory Integrity/HVCI via
+registry+CIM, `Get-PhysicalDisk` SMART health) — new `CheckItem`-shaped
+probes, printed as a second, clearly separate section in `check()` and the
+GUI's Check page so a "flag" never touches the tool-availability pass/fail
+logic `check_status()` already owns. **`--notes`** on `capture` and a
+`Trace.notes` field, shown in both report renderers. A **compare wizard**
+on the GUI's Capture page (Save as baseline / Compare to baseline buttons)
+— pure UI, reusing `engine.compare.compare()` exactly as `findmybottleneck
+compare` already does. **`engine/history.py`** (new module): scans a
+folder of trace JSON for `trend_note` (1% low, earlier half vs later half),
+`thermal_trend_note` (GPU temp rise, hedged as "not proof of anything on
+its own"), and `os_change_note` (anchored to an actual recorded
+`Hardware.os_build` transition, not an arbitrary split) — a new
+`findmybottleneck history <folder>` command. **Per-process GPU Engine
+counters** (D-0005-consistent: `typeperf -q` asks whether
+`\GPU Engine(*)\Utilization Percentage` exists before ever adding it to
+the real capture command, since one bad counter path can fail the whole
+typeperf invocation): a new `background_gpu` finding names a non-target
+process using a real share of the 3D engine, flowing through the existing
+`report.findings` pipeline into both renderers for free. **`overlay
+--log <path>`**: the same rolling verdict `overlay` already computes,
+appended to a file with a timestamp — so a stutter noticed mid-match can
+be looked up after the fact.
+
+Two ideas were skipped with a stated reason, not silently dropped: (1) **"what upgrade helps"** —
+already substantially covered by `engine/frames.py`'s existing verdict fix
+text (GPU-bound → "buy a faster card"; CPU-bound → deliberately steers to
+memory configuration *instead of* "buy a CPU", the project's own
+documented stance on the most common real cause). Building a new "buy
+this" calculator on top would have contradicted that already-reasoned
+design and `report.py`'s own closing disclaimer ("does not know whether
+the component is worth replacing"). (2) **Clip mode** (auto-capture only
+near a frame-rate drop) — turned out to already be covered: D-0015's
+`--seconds 0` already records an entire session, and `engine/hitch.py`
+already finds and attributes every hitch in it retroactively; building a
+trigger-based recorder would have been new infrastructure duplicating
+what unbounded capture plus existing hitch detection already deliver.
+
+**Consequences.** Eight real, working additions, each independently compiled/tested (73
+tests green throughout) and several smoke-tested with synthetic data
+(`_parse_gpu_engine`'s PID/engtype regex, `background_gpu`'s filtering,
+`engine/history.py`'s trend/thermal/build-change detectors) since none of
+this session's new collection logic has unit-test coverage yet — matching
+this project's existing boundary (parsers are tested against synthetic
+text, subprocess orchestration is not) rather than a gap unique to this
+batch. `hardware()` gained one more PowerShell call (`Win32_OperatingSystem`
+for `os_build`) on top of D-0019's just-completed trim — deliberately, since
+unlike motherboard/RAM-slot data, `os_build` has to be on *every* capture
+for `os_change_note` to ever detect a transition; this is the "genuinely
+needed every time" case D-0019's fix was drawing a line around, not a
+regression of it. Nothing here has run against real hardware — same
+disclosed-gap shape as the rest of this session's Windows-only work.
+
+<!-- bitacora:entry
+id: D-0019
+date: 2026-09-21
+tags: [collect, gui]
+-->
+### Split motherboard/RAM-slot reads out of hardware() so capture never pays their cost
+
+**Context.** A `/code-review` this session (medium effort, 8 finder angles) flagged that D-0018's
+two new CIM queries (`Win32_BaseBoard`, `Win32_PhysicalMemoryArray`) were
+added directly inside `hardware()`, which `run_capture()` calls on every
+capture — not only from the System page that actually wants motherboard/
+RAM-slot data. Confirmed by reading the code, not just trusting the
+finder: `run_capture` calls `hw, hw_missing = hardware(); missing.update
+(hw_missing)`, so every `findmybottleneck capture` was paying two extra
+PowerShell spawns (~100-300ms each) for data it never displays, and a
+probe failure there ("motherboard identity did not answer") would show up
+in that capture's own `Trace.missing` → Report "Not measured" section,
+next to genuinely capture-relevant gaps like frame attribution — noise
+unrelated to diagnosing what set a game's pace.
+
+**Decision.** Moved both queries out of `hardware()` into a new `motherboard_status()`
+(`collect/windows.py`), returning `(motherboard, memory_slots_total,
+memory_max_capacity_gb, missing)` — the same "one reading, for the System
+page, not tied to a capture" shape `gpu_status()`/`cpu_temperature()`
+already established this session. The GUI's `_on_read_system` calls it
+alongside `hardware()`/`gpu_status()`/`cpu_temperature()` and assigns the
+three fields onto the `Hardware` object it already has, so
+`_show_system_results` needed no changes — it still just reads
+`hw.motherboard`/`hw.memory_slots_total`/`hw.memory_max_capacity_gb`.
+
+**Consequences.** `capture` is back to exactly the PowerShell call count it had before D-0018
+(3, not 5), and a capture's "Not measured" section can no longer contain
+motherboard/RAM-slot-layout gaps that have nothing to do with a game's
+bottleneck. The cost: `Hardware`'s three upgrade-guidance fields are now
+populated by two different functions instead of one, so a future caller
+that wants a fully-populated `Hardware` for some other purpose has to
+remember to call both `hardware()` and `motherboard_status()` and merge
+them — acceptable today since the only caller that wants both is the
+System page, which already does.
+
+<!-- bitacora:entry
+id: D-0018
+date: 2026-09-21
+tags: [gui, collect]
+-->
+### Show upgrade-relevant hardware detail (motherboard, free RAM slots, exact part) without inventing what Windows can't read
+
+**Context.** Juan's ask was concrete: someone who wants to add a stick of RAM to a second
+slot should be told what to buy to match, and what the board can take. The
+tempting version of this — "your motherboard supports up to N MHz, buy
+that" — cannot be built honestly: no WMI class, and no Windows API at all,
+reports a motherboard's maximum *supported speed*. That number lives only
+in the manufacturer's QVL page or the board's manual. Fabricating it, or
+inferring it from the currently-installed speed, would violate this
+project's own non-negotiable against invented data and its whole
+`report.py`/`report_view.py` convention of naming what was not measured
+rather than guessing.
+
+**Decision.** `hardware()` gained three real, WMI-backed reads instead: `Win32_BaseBoard`
+(manufacturer + product → `Hardware.motherboard`, so the user can look up
+that exact board's QVL themselves), `Win32_PhysicalMemoryArray`
+(`MemoryDevices` → `memory_slots_total`, `MaxCapacity` →
+`memory_max_capacity_gb` — the largest *total* the board supports, a real
+field, not the same claim as "fastest speed supported"), and a `Capacity`
+column added to the existing `Win32_PhysicalMemory` query
+(`capacity_gb` per module). The System page turns slots-total minus
+modules-installed into "N free — room to add a module" (or "no free slots
+— replacing, not adding"), and prints each module's exact manufacturer/part
+number as what to buy to match. A new italic line states plainly that
+maximum supported RAM speed cannot be read here and points at the board's
+own QVL/manual — the same "not measured" honesty the Report tab already
+has, extended to a page most people will read specifically to go shopping.
+
+**Consequences.** The one scenario Juan asked about — "can I add a stick, and which one" — is
+now answerable from data this project actually has, with no new
+dependency (three more CIM queries, same pattern as everything else in
+`hardware()`). The line this deliberately does not cross: findmybottleneck
+still will not tell anyone what speed to buy, only what they already have
+and how many slots are open — a real product-scope decision, not a gap to
+quietly fill later with a hardcoded motherboard-spec database (a
+meaningfully bigger, separately-decided feature: sourcing and maintaining
+compatibility data for motherboards this project cannot verify against
+real hardware). Untested against a real motherboard, same disclosed-gap
+shape as the rest of this session's Windows-only work.
+
+<!-- bitacora:entry
+id: D-0017
+date: 2026-09-21
+tags: [collect, dependency]
+-->
+### CPU temperature via LibreHardwareMonitor's Python binding, as an opt-in sensors extra
+
+**Context.** Juan asked for CPU temperature on the System page. Unlike everything else this
+project reads, there is no command-line tool already on Windows that
+exposes it (D-0005's whole pattern — shell out to what's there — has
+nothing to shell out to here). The real options were: build and maintain
+our own kernel-mode driver (ruled out in conversation — needs an EV
+code-signing certificate, harder to qualify for as an individual than a
+registered company, plus ongoing Windows Hardware Dev Center submission,
+plus fighting Virtualization-Based Security on modern Windows, for a
+project this size); or depend on LibreHardwareMonitor, which already
+maintains its own signed driver. Discovered mid-conversation: `HardwareMonitor`
+(PyPI, BSD-3-Clause, github.com/snip3rnick/PyHardwareMonitor) is a thin
+pre-built Python layer over `LibreHardwareMonitorLib` via `pythonnet` —
+no C# to write or compile ourselves, just a pip install.
+
+**Decision.** New optional extra, `pip install findmybottleneck[sensors]` (`HardwareMonitor`,
+which pulls `pythonnet`) — separate from `[gui]`, so installing one never
+pulls the other. `collect.windows.cpu_temperature()` opens a
+`HardwareMonitor.Hardware.Computer` with only `IsCpuEnabled = True` (not
+motherboard/GPU/etc — GPU already comes from nvidia-smi, and enabling more
+than needed only enlarges what can go wrong), reads every `Temperature`
+sensor under the CPU hardware node, and prefers whichever reads as
+"Package"/"Tctl"/"Tdie" over a per-core maximum. Not called from
+`hardware()` or `check()` — capture and check must keep working without
+Administrator, which this needs (LibreHardwareMonitor's own driver, not
+one this project ships or signs); it is a fifth caller pattern, only from
+the GUI's System page, opt-in in both the install and the privilege it
+asks for. The import and the sensor read are both wrapped in a broad
+`except Exception`, not just `ImportError` — see M-0004, found while
+verifying this on a machine with the package installed but no .NET
+runtime, which is exactly the "installed but broken" case a normal
+import-only try/except misses.
+
+**Consequences.** CPU temperature becomes readable without anyone hand-writing or signing a
+driver, and the dependency is genuinely optional — nothing about capture,
+check, overlay, or the GUI's other three pages changes for someone who
+never installs `[sensors]`. The cost: this is the project's first
+dependency that is not pure Python and not "a tool already on the target
+machine" — it needs .NET Framework 4.7+ present (usually true on Windows
+10/11, not guaranteed), and it needs Administrator, which nothing else in
+this project has ever required. Untested against real hardware (same
+disclosed-gap shape as the rest of this session): confirmed on macOS only
+that the import/interop failure path degrades to `missing` instead of
+crashing, never that a real Windows machine with Administrator actually
+returns a CPU temperature.
+
+<!-- bitacora:entry
+id: D-0016
+date: 2026-09-21
+tags: [gui]
+-->
+### Add a System tab that calls hardware() standalone, not only inside a capture
+
+**Context.** Juan asked for a tab showing PC component details. `collect.windows.hardware()`
+already reads exactly that — GPU name/driver, CPU name/core counts, RAM
+module speeds/manufacturer/channels, OS — but it had only ever been called
+as a side effect of `run_capture`, buried inside a 30-second recording.
+
+**Decision.** New "System" page in the sidebar (Check → System → Capture → Report), calling
+`hardware()` directly on a button press, on the same background-thread +
+`self.after(0, ...)` pattern `_on_check` already uses. No new collection
+code: `hardware()`'s signature and return shape (`Tuple[Hardware, Dict[str,
+str]]`) were untouched, so the GUI is just a fourth caller of a function
+that already existed for a different reason. Grouped into GPU/CPU/Memory/OS
+sections with a "Not read" section underneath for whatever `hardware()`'s
+own `missing` dict reports, mirroring the Check tab's ok/miss language
+rather than inventing a new one. Disabled on non-Windows with the same
+"Needs Windows" pattern Capture already uses, since `hardware()` shells out
+to nvidia-smi and Windows CIM classes.
+
+**Consequences.** No engine or collector changes — this is presentation
+only, reusing `hardware()` exactly as `run_capture` already calls it, so a
+future change to what hardware is read (a new field, a new probe) reaches
+both callers for free. The cost: `hardware()` now runs standalone, outside
+a capture, which was never exercised before — its own probes (nvidia-smi,
+two PowerShell CIM queries) are unit-tested for parsing but not for
+"running twice in one session back to back," which is now a real usage
+pattern this adds and has not been verified against real hardware
+(same disclosed-gap shape as the rest of this session's GUI work).
+
+<!-- bitacora:entry
 id: D-0015
 date: 2026-09-21
 tags: [capture, gui]
@@ -291,293 +531,18 @@ RTSS instance — built against RTSS's own documented layout, the same posture
 integration, with the concurrency caveats above on top of that, not instead
 of it.
 
-<!-- bitacora:entry
-id: D-0011
-date: 2026-09-21
-tags: [design]
--->
-### Attempted a wrong-GPU finding, and pulled it before shipping
-
-**Context.** Juan pointed at a folder of PC-gaming-bottleneck YouTube transcripts to see
-whether they held anything the project's own research had missed. Most of it
-was the same ground already covered, or content-farm filler recommending the
-exact calculator sites D-0007 rejects. One thing recurred across several
-transcripts and looked genuinely new: a laptop can silently render a game on
-integrated graphics instead of the discrete card, and `collect/windows.py`
-already reads the discrete card via `nvidia-smi` regardless of which GPU
-actually rendered the frame — a trace from a misconfigured laptop would show
-a card that stayed idle the whole capture, data this project was already
-gathering and not reading for this.
-
-**Decision.** Built `engine/config.py::wrong_gpu`, and ran it through the M-0001 guardrail
-(a `/trio-auditor` pass before shipping, not after) three times. Each pass
-found a real defect the previous fix hadn't closed: (1) a missing
-utilisation reading treated as 0%, and idle share computed over the whole
-capture rather than while frames were recorded; (2) fixed with a `None`
-filter and a `[min, max]` frame-time window — which the next pass showed
-compares two collectors' clocks that do not share an origin
-(`_parse_gpu`'s samples are indexed `0, 0.5, 1.0, …` from collector start;
-`_parse_presentmon`'s frames are indexed from zero at the *first captured
-frame*), so the "same window" the code assumes is not actually the same
-window in a real trace; and, independently, that the window swallows any
-mid-capture gap (a loading screen, an alt-tab) as if it were idle time in the
-supposedly-active period; (3) a GPU-busy floor meant to separate a real
-stall from a wrong-GPU laptop, which both auditors independently showed
-cuts the wrong way too: a light or capped game genuinely running on the
-wrong GPU can render fast enough that its own GPU-busy share never crosses
-the floor, silently suppressing the one case the rule exists to catch.
-
-Three rounds, three genuinely different failure shapes, each deeper than the
-last rather than converging — the opposite of what a healthy fix-and-reverify
-cycle looks like (contrast D-0008 and D-0010, each closed in one or
-two rounds). That pattern is itself the signal: the rule was not sound
-enough to fix incrementally, so it was deleted — function, constants, tests,
-and its `judge()` wiring — rather than attempting a fourth patch.
-
-**Consequences.** This is `engine/config.py`'s first pulled finding, and the guardrail did
-exactly its job: catching a rule that looked reasonable on a first read
-before it reached a real trace, not after. The underlying idea is not wrong
-— a laptop rendering on the wrong GPU is real and `collect/windows.py`'s data
-could in principle show it — but doing so honestly needs the collector's
-GPU and frame samples to share a real, common clock, which they do not today
-(D-0002's boundary means `engine/` cannot fix this by reading harder; it is
-a `collect/` problem). Revisiting this after the collector has an actual
-Windows capture to check timestamps against (`STATE.md`'s **In flight** item)
-is the earliest this should be tried again.
-
-<!-- bitacora:entry
-id: D-0010
-date: 2026-09-21
-tags: [design]
--->
-### Judge CPU throttling the same way GPU throttling is judged
-
-**Context.** Juan asked to look at how other tools detect bottlenecks and find something
-this project wasn't doing yet. `engine/config.py::throttling` already checks
-whether the GPU is being held back by power or temperature, cited from
-nvidia-smi's own clocks-event-reasons. Nothing here ever asked the same
-question of the processor, even though `collect/windows.py` already requests
-`\Processor Information(_Total)\% Processor Performance` and `trace.py`
-already carries it on every `CpuSample` — the data was collected and unused.
-A Microsoft support article on why Task Manager can show CPU usage over 100%
-gives the exact mechanism in one sentence: "a processor that's running 100%
-of the time and clocked down to 50% frequency performs only half the work."
-
-**Decision.** Add `engine/config.py::cpu_throttling`, gated the same way the PCIe link
-finding is gated (D-0004): only samples where `% Processor Time` is at or
-above 80% count, because a low `% Processor Performance` at idle is the
-processor correctly downclocking to save power, not a fault. Within busy
-samples, a share below 85% of nominal clock is reported as the processor
-being held back — laptop power plans capping "Maximum processor state" and
-thermal throttling being the two real-world causes named in the fix text.
-
-**Consequences.** This is the CPU-side twin of the GPU throttling finding, and it was buildable
-today because the collector already gathered the counter — the gap was only
-in `engine/`, not in `collect/`. It also closes a real blind spot: a "your
-processor is setting the pace" verdict previously had no way to say *why* the
-processor was slow, and "waiting on memory" (D-0004's neighbour, the memory
-Finding) was the only explanation this tool could offer. Now a throttled
-clock is a second, independent explanation, with its own evidence. The
-research also turned up two bigger, unbuilt ideas worth keeping — DPC/ISR
-latency (the LatencyMon method, needs an ETW capture this project doesn't
-have) and per-process `GPU Engine` counters (catching a background app
-stealing the 3D engine) — both left for `STATE.md`'s **Next**, not built now,
-because both need new collection code rather than reading data already in
-hand.
-
-<!-- bitacora:entry
-id: D-0009
-date: 2026-09-21
-tags: [design]
--->
-### Skip the shared-VRAM counter - Microsoft documents it as unreliable
-
-**Context.** `STATE.md` named the `GPU Process Memory\Shared Usage` performance counter
-as the way to read spilled graphics memory without native code or admin
-rights, with the caveat that Microsoft publishes no reference for the counter
-set. A web search to fill that gap surfaced a Microsoft Learn support article
-titled "GPU Process Memory counters report incorrect value", describing known
-memory-leak-shaped bugs in that exact counter set on affected Windows
-versions, with Task Manager or WPA as the only reliable alternatives — neither
-of which this tool can shell out to and parse the way it does `nvidia-smi` or
-`typeperf`.
-
-**Decision.** Do not implement the shared-VRAM counter. `trace.py` already carries a
-`gpu_shared_mb` field and `engine/config.py` and `engine/hitch.py` already
-know what to do with it if it is ever populated, so nothing here is wasted —
-but the collector will not read it until a source exists that can be trusted
-the way every other rule in this project is trusted enough to cite.
-
-**Consequences.** This closes out `STATE.md`'s Next #3 without building a finding that could
-itself be the false accusation this tool exists to avoid — the exact trap
-D-0004 names for the PCIe link. The cost is that VRAM overflow is still
-only detected from `nvidia-smi`'s dedicated-memory reading
-(`engine/config.py::vram`), which misses the case where the driver has
-already started spilling and dedicated memory looks fine. If a reliable
-source for the counter set appears later, the schema is ready for it.
-
-<!-- bitacora:entry
-id: D-0008
-date: 2026-09-21
-tags: [design]
--->
-### Automate the resolution-drop test as a compare command
-
-**Context.** `STATE.md` named the resolution-drop test as Next #2 and called it "the
-community's own gold standard for settling CPU-versus-GPU" while noting
-"nothing automates it." A web search across several sources confirmed the
-method and its interpretation: drop resolution or in-game settings, capture
-again, and if the frame rate barely moves the CPU was always the limit —
-giving the GPU less to do changed nothing because it never had the whole
-frame anyway. If the frame rate rises, the GPU was the limit. A single
-capture's per-frame attribution (D-0006, `engine/frames.py`) is an
-inference from one sample of reality; this test is the same claim checked
-experimentally, against a second sample.
-
-**Decision.** Add `engine/compare.py`, taking two already-captured traces and returning
-whether the second confirms or contradicts the first verdict, with an 8%
-fps-change tolerance named as judgement the same way every other threshold in
-`engine/` is. It reuses `frames.analyse` rather than re-deriving the verdict,
-and it says "inconclusive" for frame-cap, mixed, stall or unknown verdicts
-rather than forcing a confirm/contradict answer the test cannot actually give.
-Wired in as `findmybottleneck compare <before> <after>`, and surfaced as a
-one-line hint directly under a gpu/cpu verdict in `report.render()` so the
-feature is discoverable from the screen people already read, not only from
-`--help`.
-
-**Consequences.** A verdict is no longer only as strong as one capture's inference — someone can
-now falsify it, which is the difference between an opinion and a claim that
-can be argued with, in the same spirit as D-0006 labelling coincidence
-rather than proof. The cost is a workflow: this only helps someone who
-captures twice and remembers to lower something between the two runs, and the
-tool has no way to detect whether they actually did. If they didn't, and both
-captures are the same scene at the same settings, "contradicts" or "confirms"
-would follow from noise rather than from anything real. The wording is honest
-about this ("may not have been comparable") but cannot enforce it.
-
-<!-- bitacora:entry
-id: D-0007
-date: 2026-09-21
-tags: [naming]
--->
-### Take the name the search term owns, and earn it
-
-**Context.** The tool was built as `whylow`. The word "bottleneck" is owned by a dozen
-sites that ask for two model numbers and return a percentage with no
-denominator — the exact thing this tool exists to be the opposite of. A
-thread on Linus Tech Tips settles it as its accepted answer: "Bottleneck
-calculators exist to sell more hardware, not to be an actually useful
-advisement tool." Taking the word risks being read as one of them before
-anyone sees the output.
-
-**Decision.** The name is findmybottleneck, with `fmb` as the short command, and the
-positioning is explicit rather than implied: the README has a section named
-"Not a bottleneck calculator" that says what those sites structurally cannot
-see — memory at a fallback speed, a card on its power limit, a link at x4 —
-and the package description leads with "measured on your machine while you
-play, not calculated from a spec sheet".
-
-**Consequences.** The tool now appears where people actually search, and the comparison it
-invites is one it wins on the merits, because the differentiator is that it
-touches the machine at all. The risk is real and accepted: a reader who
-recognises the word may dismiss it before reading, so the first screen of the
-README has to do the work of separating them. If that turns out to cost more
-than the search term is worth, the package can be renamed and the old name
-kept as an alias — nothing about the code depends on it.
-
-<!-- bitacora:entry
-id: D-0006
-date: 2026-09-21
-tags: [design]
--->
-### A hitch cause is coincident evidence, never proof
-
-**Context.** Frame data arrives per frame. The counters arrive about once a second. So when
-a 95 ms frame lands next to a disk read averaging 45 ms, the honest statement
-is that they happened at the same time — not that one caused the other.
-
-**Decision.** Every hitch cause is labelled coincident, the summary separates hitches that
-have something to blame from those that do not, and "unexplained" is printed as
-a result rather than hidden. A cause matching one sample is presented as weaker
-than one matching several.
-
-**Consequences.** The tool can claim the ground nobody has claimed — no tool in this category
-attempts per-hitch attribution at all — without claiming more than the sampling
-rate supports. The cost is a wordier answer than a confident one, and the
-permanent temptation to promote a correlation once it has been right a few
-times.
-
-<!-- bitacora:entry
-id: D-0005
-date: 2026-09-21
-tags: [design]
--->
-### Shell out to what is already installed
-
-**Context.** The data needs vendor telemetry, Windows performance counters, frame timings
-and SMBIOS. Reading those properly means native code, a driver, or a bundled
-runtime — and a diagnostic tool people install while already annoyed cannot ask
-for that.
-
-**Decision.** Everything is a subprocess against something already present: nvidia-smi ships
-with the driver, typeperf ships with Windows, CIM answers through PowerShell.
-PresentMon is the only download, it is MIT licensed, and it is named as a
-download rather than bundled. No dependencies, no compilation.
-
-**Consequences.** It installs in seconds and every reading is reproducible by hand, which matters
-for a tool whose output is an accusation. The cost is parsing text meant for
-humans, per-vendor blindness — on AMD and Intel there is no command-line
-telemetry at all, so those machines get frames and counters and nothing else —
-and column names that have to be read from the header rather than assumed.
-
-<!-- bitacora:entry
-id: D-0004
-date: 2026-09-21
-tags: [design]
--->
-### Refuse to judge a metric measured at idle
-
-**Context.** A graphics card narrows its PCIe link when idle to save power. Read the link
-with nothing running and it says x1, which looks exactly like a card seated
-badly. This is a known trap: the forums are full of people told they have a
-broken slot by a tool that read a sleeping card.
-
-**Decision.** The link is judged only from samples where GPU utilisation was at least 50%. If
-no such sample exists, the finding is not "your link is fine" and not "your
-link is broken" — it is a note saying the link was not judged, and why.
-
-**Consequences.** The tool cannot produce the specific false positive that the category is
-mocked for. The same shape will apply to every future metric that is only
-meaningful under load, so it is a rule rather than a special case. The cost is
-that a capture taken at the wrong moment yields less, which is correct and has
-to be explained rather than hidden.
-
-<!-- bitacora:entry
-id: D-0003
-date: 2026-09-21
-tags: [design]
--->
-### A frame cap is a verdict, not a silence
-
-**Context.** Something always sets the pace — the enthusiast forums say it more bluntly than
-any documentation: there is no such thing as no bottleneck. But a machine
-sitting at a 60 fps cap has both components idle, and every rule that looks for
-a busy component will either pick the larger number and be confidently wrong,
-or find nothing and say so.
-
-**Decision.** A capture whose frames are unusually even, land within 3% of a common cap, and
-leave spare time on both sides is reported as a cap, by name, with the fps.
-The headline is that nothing is limiting the machine.
-
-**Consequences.** The single most embarrassing wrong answer this tool could give — telling
-someone their processor is holding them back while they sit behind a cap they
-forgot they set — is now the one case it handles first. The cost is three
-thresholds that are judgement rather than measurement, so the verdict prints
-itself as a judgement.
-
 
 ## Archived
 
 Older entries, one line each. `recall` still searches them in full.
 
+- `D-0011` Attempted a wrong-GPU finding, and pulled it before shipping — [design] → `docs/bitacora-archive/decisions-2026.md`
+- `D-0010` Judge CPU throttling the same way GPU throttling is judged — [design] → `docs/bitacora-archive/decisions-2026.md`
+- `D-0009` Skip the shared-VRAM counter - Microsoft documents it as unreliable — [design] → `docs/bitacora-archive/decisions-2026.md`
+- `D-0008` Automate the resolution-drop test as a compare command — [design] → `docs/bitacora-archive/decisions-2026.md`
+- `D-0007` Take the name the search term owns, and earn it — [naming] → `docs/bitacora-archive/decisions-2026.md`
+- `D-0006` A hitch cause is coincident evidence, never proof — [design] → `docs/bitacora-archive/decisions-2026.md`
+- `D-0005` Shell out to what is already installed — [design] → `docs/bitacora-archive/decisions-2026.md`
+- `D-0004` Refuse to judge a metric measured at idle — [design] → `docs/bitacora-archive/decisions-2026.md`
+- `D-0003` A frame cap is a verdict, not a silence — [design] → `docs/bitacora-archive/decisions-2026.md`
 - `D-0002` The collector and the engine meet only in a trace file — [design] → `docs/bitacora-archive/decisions-2026.md`

@@ -7,6 +7,44 @@
 >
 > Add entries with: `node .bitacora/cli.mjs new mistake "Title" --tags area,failure-mode`
 <!-- bitacora:entry
+id: M-0004
+date: 2026-09-21
+tags: [collect, failure-mode]
+severity: medium
+-->
+### cpu_temperature() only caught ImportError; pythonnet's real failure mode is RuntimeError
+
+**What happened.** The first version of `cpu_temperature()` (D-0017) wrapped
+`from HardwareMonitor.Hardware import ...` in `except ImportError` only, on
+the assumption that "the package isn't installed" was the only way this
+import could fail — matching every other optional-dependency import in this
+codebase (`customtkinter` in the GUI). Tested on this Mac with the package
+actually installed but no .NET runtime present, the import raised
+`RuntimeError` from deep inside `pythonnet`'s own `import clr` — uncaught,
+it would have propagated out of the background thread `_on_read_system`
+runs in, silently killing that thread before `self.after(...)` ever fired,
+leaving the System page's button stuck on "Reading…" forever with no error
+shown.
+
+**Root cause.** `HardwareMonitor`/`pythonnet` is an interop boundary to a
+different runtime (.NET/Mono), not a plain Python import — its failure
+modes (no runtime found, wrong runtime version, a native library that
+won't `dlopen`) surface as whatever exception pythonnet's own loader
+chooses to raise, not consistently `ImportError`. Copying the
+`except ImportError`-only pattern from `customtkinter` (a pure-Python
+import that really can only fail that one way) assumed the two
+dependencies fail the same way without checking.
+
+**Guardrail.** Any optional dependency that bridges to a non-Python runtime
+(pythonnet/CLR, a native extension that loads a system library, etc.) gets
+a broad `except Exception` around its import and its first real call, not
+just `except ImportError` — and that broad catch must be exercised once
+against an environment where the dependency is installed but cannot
+actually run (not just uninstalled), the way this was caught: `pip install
+HardwareMonitor` in a venv with no .NET runtime, then call the function and
+confirm it returns `(None, missing)` instead of raising.
+
+<!-- bitacora:entry
 id: M-0003
 date: 2026-09-21
 tags: [gui, capture]

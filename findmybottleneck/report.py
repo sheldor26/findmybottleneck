@@ -14,6 +14,7 @@ import textwrap
 from typing import List
 
 from .engine.compare import CompareResult
+from .engine.history import HistoryEntry
 from .verdict import Finding, Report
 
 _COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
@@ -36,6 +37,9 @@ def _wrap(text: str, width: int = 74, indent: str = "  ") -> List[str]:
 
 def render(report: Report, show_sources: bool = True) -> None:
     print()
+    if report.notes:
+        print(dim(f"  “{report.notes}”"))
+        print()
     verdict = report.verdict
     if verdict is None:
         print(f"{yellow('No verdict.')} The capture has too few frames to attribute anything.\n")
@@ -135,3 +139,36 @@ def render_compare(result: CompareResult) -> None:
         for line in _wrap(result.note):
             print(line)
     print()
+
+
+def render_history(entries: List[HistoryEntry], note: str, thermal_note: str = "",
+                   build_note: str = "") -> None:
+    print()
+    if not entries:
+        print(dim("  no readable trace files found in this folder"))
+        print()
+        return
+    print(bold(f"{len(entries)} captures"))
+    print()
+    for entry in entries:
+        target = entry.target or "?"
+        limiter = entry.limiter or "no verdict"
+        median = f"{entry.median_fps} fps" if entry.median_fps is not None else "—"
+        low1 = f"{entry.low1_fps} fps 1% low" if entry.low1_fps is not None else "—"
+        line = f"  {entry.captured_at}  {target:<16}  {limiter:<10}  {median:>10}  {low1:>16}"
+        print(line)
+        if entry.notes:
+            print(dim(f"      “{entry.notes}”"))
+    print()
+    if note:
+        for line in _wrap(note):
+            print(line)
+        print()
+    if thermal_note:
+        for line in _wrap(thermal_note):
+            print(line)
+        print()
+    if build_note:
+        for line in _wrap(build_note):
+            print(line)
+        print()

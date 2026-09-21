@@ -32,8 +32,12 @@ SEVERITY_COLOR = {
 # Same ordering report.py's ORDER dict uses.
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "note": 3}
 
-_MUTED = ("gray30", "gray65")
-_CARD_BG = ("gray92", "gray17")
+_OK_COLOR = "#22C55E"
+_TEXT = "#F4F4F5"
+_MUTED = "#8A8A93"
+_CARD_BG = "#18181C"
+_BORDER = "#26262B"
+_TILE_BG = "#18181C"
 _WRAP = 620
 
 
@@ -41,7 +45,7 @@ def _label(parent, text, *, size=13, weight="normal", slant="roman", color=None,
     return ctk.CTkLabel(
         parent, text=text, justify="left", anchor="w", wraplength=wrap,
         font=ctk.CTkFont(size=size, weight=weight, slant=slant),
-        text_color=color if color is not None else "gray10",
+        text_color=color if color is not None else _TEXT,
     )
 
 
@@ -57,6 +61,12 @@ def render(container: ctk.CTkScrollableFrame, report) -> None:
     same order report.render() prints in."""
     for child in container.winfo_children():
         child.destroy()
+
+    _stat_row(container, report)
+
+    if report.notes:
+        _label(container, f"“{report.notes}”", size=13, slant="italic", color=_MUTED).pack(
+            anchor="w", fill="x", pady=(0, 12))
 
     if report.verdict is None:
         _label(container, "No verdict. The capture has too few frames to attribute anything.",
@@ -80,9 +90,51 @@ def render(container: ctk.CTkScrollableFrame, report) -> None:
 
 
 def _card(parent) -> ctk.CTkFrame:
-    frame = ctk.CTkFrame(parent, corner_radius=12, fg_color=_CARD_BG)
+    frame = ctk.CTkFrame(parent, corner_radius=12, fg_color=_CARD_BG,
+                         border_width=1, border_color=_BORDER)
     frame.pack(fill="x", pady=(0, 14))
     return frame
+
+
+def _stat_tile(parent, label: str, value: str, color: str) -> ctk.CTkFrame:
+    tile = ctk.CTkFrame(parent, corner_radius=12, fg_color=_TILE_BG,
+                        border_width=1, border_color=_BORDER)
+    ctk.CTkLabel(tile, text=value, font=ctk.CTkFont(size=24, weight="bold"),
+                text_color=color).pack(anchor="w", padx=16, pady=(14, 0))
+    ctk.CTkLabel(tile, text=label, font=ctk.CTkFont(size=12), text_color=_MUTED).pack(
+        anchor="w", padx=16, pady=(2, 14))
+    return tile
+
+
+def _stat_row(container, report) -> None:
+    """The at-a-glance row: verdict, median FPS, 1% low, findings — the
+    numbers a screenshot of this window should carry on its own, before
+    anyone reads a single evidence line below."""
+    row = ctk.CTkFrame(container, fg_color="transparent")
+    row.pack(fill="x", pady=(0, 16))
+    for i in range(4):
+        row.grid_columnconfigure(i, weight=1, uniform="stat")
+
+    stats = report.frames or {}
+    v = report.verdict
+    verdict_color = LIMITER_COLOR.get(v.limiter, LIMITER_COLOR["unknown"]) if v else _MUTED
+    verdict_text = v.limiter.replace("-", " ").upper() if v else "N/A"
+
+    if report.findings:
+        worst = min(report.findings, key=lambda f: SEVERITY_ORDER.get(f.severity, 9))
+        findings_color = SEVERITY_COLOR.get(worst.severity, SEVERITY_COLOR["note"])
+    else:
+        findings_color = _OK_COLOR
+
+    tiles = [
+        ("Verdict", verdict_text, verdict_color),
+        ("Median FPS", str(stats.get("median_fps", "—")), "#3B82F6"),
+        ("1% Low FPS", str(stats.get("low1_fps", "—")), "#F59E0B"),
+        ("Findings", str(len(report.findings)), findings_color),
+    ]
+    for i, (label, value, color) in enumerate(tiles):
+        tile = _stat_tile(row, label, value, color)
+        tile.grid(row=0, column=i, padx=(0 if i == 0 else 8, 0), sticky="nsew")
 
 
 def _verdict_card(container, report) -> None:

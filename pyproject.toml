@@ -22,6 +22,11 @@ dependencies = []
 [project.optional-dependencies]
 # The CLI stays standard-library-only. Only `findmybottleneck gui` needs this.
 gui = ["customtkinter>=5.2.0"]
+# CPU temperature, which no command-line tool already on Windows exposes —
+# everything else this project reads comes from nvidia-smi/typeperf/CIM/
+# PresentMon, already on the machine. This is the one exception, and it
+# needs Administrator (D-0017). Not required for capture, check, or the GUI.
+sensors = ["HardwareMonitor>=1.2.0"]
 
 [project.urls]
 Homepage = "https://github.com/sheldor26/findmybottleneck"

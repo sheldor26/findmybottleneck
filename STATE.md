@@ -48,12 +48,20 @@ updated: 2026-09-21
   OS-level shared memory access is not (see **In flight**).
 - `findmybottleneck gui` — a desktop window (`gui/app.py` +
   `gui/report_view.py`), optional (`pip install findmybottleneck[gui]`,
-  D-0013), the project's first GUI and first new dependency. Three tabs —
-  Check, Capture (with a progress bar), Report (as cards, not monospace) —
-  driving the exact same `collect.windows.check_status`/`run_capture` and
-  `engine.judge` the CLI already calls; `check()`/`capture()` were each split
-  into a data-returning core and a thin CLI printer so both callers share one
-  implementation.
+  D-0013), the project's first GUI. Four pages — Check, System, Capture,
+  Report — behind a left sidebar nav, dark background, one orange accent
+  (Juan asked for something closer to a dashboard reference he shared).
+  Report opens with a stat-tile row (Verdict/Median FPS/1% Low/Findings).
+  System (D-0016) reads GPU/CPU/memory/motherboard/RAM-slot identity plus
+  live GPU sensors (`gpu_status()`, D-0016) and CPU temperature
+  (`cpu_temperature()`, opt-in `[sensors]` extra over `pythonnet` +
+  Administrator, D-0017) standalone, not tied to a capture. Motherboard/
+  RAM-slot detail (D-0018) answers "can I add a stick, and which one" —
+  free slots, exact part to match — without ever claiming a maximum
+  *supported* speed, which no Windows API reports; a `/code-review` this
+  session caught those two extra queries running on every `capture`, not
+  just System, and D-0019 split them into their own `motherboard_status()`
+  so `capture` pays for exactly what it needs.
 - `findmybottleneck capture` now waits for the target process to actually
   appear before starting the timed recording, instead of counting down blind
   (D-0014), and can launch it itself with `--launch <path>` so "is the game
@@ -68,56 +76,61 @@ updated: 2026-09-21
   `--launch` does.
 - `capture --seconds 0` (CLI) or an empty/`0` Seconds field (GUI) records
   until the target process exits instead of a fixed window (D-0015) — more
-  samples across a whole play session instead of a fixed 30s slice, so the
-  1% low, throttle checks and hitch breakdown all get steadier the longer
-  someone plays. Needs a target process to detect the end by; without one it
-  falls back to 30s. The GUI shows an indeterminate progress bar while
-  unbounded instead of a fraction it cannot compute.
+  samples across a whole play session for a steadier 1% low/throttle/hitch
+  read. Needs a target process to detect the end by, else falls back to 30s.
+  GUI shows an indeterminate progress bar while unbounded.
+- Eight companion features (D-0020), each compiled/tested, several
+  smoke-tested with synthetic data: `config_audit()`/`disk_health()`
+  (power plan, HAGS, Game Mode, Memory Integrity/HVCI, SMART health) as a
+  second section in `check()`/Check page, clearly separate from tool
+  pass/fail; `capture --notes`/GUI Notes field, shown in both report
+  renderers; a GUI compare wizard (Save/Compare-to-baseline buttons on
+  Capture, reusing `engine.compare.compare()`); `engine/history.py` + new
+  `findmybottleneck history <folder>` — trend, GPU-temp-rise, and
+  build-change-anchored regression notes across a folder of traces;
+  per-process `GPU Engine` counters → a `background_gpu` finding (asks
+  `typeperf -q` before adding the counter, since one bad path fails the
+  whole typeperf call); `overlay --log <path>`, the same rolling verdict
+  already computed, appended with a timestamp for after-the-fact lookup.
+  Two ideas skipped with a stated reason: an "upgrade calculator" would
+  have contradicted `engine/frames.py`'s already-deliberate CPU-bound fix
+  text (steers to memory config, not "buy a CPU") and `report.py`'s own
+  disclaimer; a stutter-triggered "clip mode" turned out to already be
+  covered by D-0015's unbounded capture plus `engine/hitch.py`'s existing
+  retroactive attribution.
 
 ## In flight
 
-- **The collector has run for real for the first time this session** — the
-  Windows machine used to build `--launch`/auto-wait above has an NVIDIA
-  card and a real PresentMon 2.6.0 binary. It immediately surfaced a real bug
-  (M-0002, now fixed): PresentMon 2.6.0 rejects `--no_top`, which both
-  `capture` and `overlay` were passing; PresentMon 2.x's actual flag is
-  `--no_console_stats`. nvidia-smi and PresentMon's own `--help`/argument
-  parsing are now confirmed against a real binary. Still unconfirmed by a
-  real capture: the synthetic smoke test used `notepad.exe` (launched, then
-  killed) as a stand-in target — it never presents a frame, so it says
-  nothing about whether `_parse_presentmon`'s column names match a real
-  capture's CSV, and `typeperf` wrote nothing in that same run (unexplained —
-  worth checking who cwd/permissions were on that machine before assuming
-  it's a real bug, since `findmybottleneck check` on the same machine reports
-  `typeperf: present`). Item 1 below (a real game, not a stand-in) is what
-  actually settles this.
-- **`rtss.py` has never talked to a real RTSS.** Its byte-offset math is unit
-  tested against a synthetic buffer, and `parse_header` rejects corrupt or
-  undersized geometry, including a single corrupted offset/size/count field,
-  via a cross-consistency check between two independently-advertised header
-  fields rather than a guessed slack bound (four `/trio-auditor` rounds,
-  pre-ship, each catching what the previous fix missed — D-0012). That check
-  has a stated, deliberate limit: it cannot prove the geometry is genuine
-  against a header with several fields corrupted *together* in a way chosen
-  to keep the equation true — round four demonstrated exactly that, and
-  closing it for real needs a live RTSS to check against, which isn't
-  available here. It does close the realistic case, a single accidental
-  corrupted field. Separately: whether `mmap.mmap(-1, 0, tagname=...)`
-  actually opens RTSS's real shared memory at its real size, and whether a
-  written OSD slot actually renders, is still unverified. Also separate: no
-  `dwBusy` spin-lock (RTSS v2.14+), and `close()`'s read-then-clear has a
-  real if narrow TOCTOU window against another writer's process — disclosed,
-  not fixed. These are all bounded concurrency/proof-limit gaps (D-0012) — a
-  torn or overwritten status line, self-correcting on the next refresh — not
-  the unbounded cross-slot corruption the geometry validation closes.
-- **The GUI has never been looked at.** It imports and builds without error,
-  and its Report tab was checked against `report.py`'s own structure, but no
-  one has actually seen the window — the user declined screen-control access
-  when it was offered this session. Colours, layout, hover behaviour, whether
-  the progress bar reads well, and now the new Launch field and the
-  indeterminate bar for unbounded capture: all unverified. `python3 -m
-  findmybottleneck gui` (after `pip install findmybottleneck[gui]`) is the
-  one thing that would settle it.
+- **The collector has run for real for the first time** — against a real
+  NVIDIA card and PresentMon 2.6.0, surfacing M-0002 (now fixed: PresentMon
+  2.x wants `--no_console_stats`, not `--no_top`). Still unconfirmed: a real
+  game's PresentMon CSV column names (the smoke test used `notepad.exe`,
+  which never presents a frame), and why `typeperf` wrote nothing in that
+  same run despite `check` reporting it present. Item 1 below settles both.
+- **`rtss.py` has never talked to a real RTSS.** Byte-offset math and header
+  geometry validation are unit tested against synthetic buffers only
+  (four `/trio-auditor` rounds, pre-ship — D-0012, which also states its
+  deliberate proof limit). Whether `mmap.mmap(-1, 0, tagname=...)` actually
+  opens RTSS's real shared memory, and whether a written OSD slot actually
+  renders on screen, is unverified — needs a live RTSS, unavailable here.
+- **The GUI has now been looked at, on macOS** — reworked to a dark
+  sidebar-nav shell with an orange accent and a Report stat-tile row (Juan
+  asked for something closer to a dashboard reference he shared). Confirmed
+  rendering correctly via `app_screenshot`: Check (live, real button click),
+  Report (stat tiles + cards, via a synthetic trace), and System's disabled
+  non-Windows state (see L-0001 for why this needed a throwaway
+  `python-tk@3.12` venv — the Mac's default `python3` has Tk 8.5, which
+  renders CustomTkinter fully blank with no error). Unconfirmed: Capture's
+  visuals, what System shows with real GPU/CPU/memory/sensor data, and
+  everything on Windows, the GUI's real target, which has never run at all.
+- **CPU temperature (D-0017) and the motherboard/RAM-slot reads (D-0018)
+  are both unverified against real hardware** — only that their failure
+  paths degrade to `missing` instead of crashing (confirmed on macOS for
+  the former; the latter's PowerShell queries weren't reachable to test
+  here at all). Whether a real board returns sensible values for
+  `Win32_BaseBoard`/`Win32_PhysicalMemoryArray`, and whether
+  `cpu_temperature()` finds a Package/Tctl/Tdie sensor under Administrator,
+  is open until item 1 below happens for real.
 - **`--seconds 0` / unbounded capture (D-0015) has never run against a real
   game.** The argument-building (dropping `-sc`/`--timed`) and the
   stop-on-exit loop are straightforward extensions of code already proven
@@ -143,15 +156,12 @@ updated: 2026-09-21
    `engine/hitch.py` only looks at GPU, disk and memory samples. Needs an ETW
    kernel-logger capture (`xperf` or the Windows Performance Recorder), which
    is a new collection dependency, not just a new engine rule.
-4. Per-process `GPU Engine` counters, to catch a background app (a browser,
-   Discord, OBS) competing for the 3D engine while the game runs. The counter
-   is readable via typeperf without admin rights, but the instances are keyed
-   by PID and engine type and nothing here parses indexed typeperf instances
-   yet — `_parse_typeperf` only reads `(_Total)` and fixed per-core columns.
-5. Actually look at the GUI: run `pip install findmybottleneck[gui]` then
-   `python3 -m findmybottleneck gui`, click through all three tabs, and fix
-   whatever doesn't look or behave right. Nobody has seen it render yet.
-6. A wrong-GPU finding (laptop rendering on integrated graphics instead of
+4. Look at the GUI on Windows: `pip install findmybottleneck[gui]` then
+   `python3 -m findmybottleneck gui`, click through all four pages with real
+   hardware and a real capture, and fix whatever doesn't look or behave
+   right. Only confirmed on macOS so far, and Capture's visuals not even
+   there yet.
+5. A wrong-GPU finding (laptop rendering on integrated graphics instead of
    the discrete card this trace reads) was attempted and pulled — see
    D-0011. It needs `collect/windows.py`'s GPU samples and PresentMon's
    frames to share a real, common clock, which they do not today
@@ -162,11 +172,10 @@ updated: 2026-09-21
 
 ## Known rough edges
 
-- NVIDIA only for telemetry. There is no command-line equivalent that ships
-  with the AMD or Intel consumer driver — `amd-smi` is part of ROCm and
-  documents Linux, `xpu-smi` is a separate install that documents data-centre
-  cards and needs Administrator. On those machines findmybottleneck gets frames and
-  Windows counters and nothing else, and has to say so.
+- NVIDIA only for GPU telemetry. No command-line equivalent ships with the
+  AMD or Intel consumer driver (`amd-smi` is ROCm/Linux, `xpu-smi` targets
+  data-centre cards and needs Administrator) — those machines get frames
+  and Windows counters and nothing else, and findmybottleneck says so.
 - The counters are sampled about once a second and a hitch lasts milliseconds,
   so hitch causes are coincidence, not causation. `typeperf` does not accept a
   sub-second interval.

@@ -14,6 +14,10 @@ from typing import Dict, List, Optional, Tuple
 from ..trace import CpuSample, Trace
 from ..verdict import Finding
 
+# A non-target process using this much of its 3D engine, on median, during
+# the capture is worth naming — not a hard rule, just a floor below which
+# background GPU use is normal (a desktop compositor, a browser's idle tab).
+BACKGROUND_GPU_SHARE = 10.0
 # Below this share of its rated speed, memory is running on a fallback default.
 MEMORY_SLACK = 0.9
 # A GPU spending this much of the capture throttled is worth reporting.
@@ -32,6 +36,17 @@ CPU_BUSY_PERCENT = 80
 CPU_PERFORMANCE_FLOOR = 0.85
 # This share of busy samples held back is worth reporting.
 CPU_THROTTLE_SHARE = 0.20
+# Short, human labels for the GPU throttle flags nvidia-smi reports — the
+# single source of truth for what each flag is called, shared by the
+# `throttling` finding below and the GUI's System page (a live reading, not
+# a finding, so it wants the label without the finding's fix text).
+THROTTLE_LABELS: Dict[str, str] = {
+    "sw_power_cap": "power limit",
+    "hw_slowdown": "hardware slowdown",
+    "hw_thermal_slowdown": "hardware thermal slowdown",
+    "sw_thermal_slowdown": "thermal",
+    "hw_power_brake_slowdown": "external power brake",
+}
 # Below this many busy samples, a first-half/second-half split is too small to
 # mean anything — three samples on each side is noise, not a trend. Judgement,
 # not a published rule, same as every other threshold in this file.
@@ -102,19 +117,20 @@ def throttling(trace: Trace, sources: dict) -> List[Finding]:
     if not trace.gpu:
         return []
     cite = _cite(sources, "throttle_reasons")
-    labels = {
-        "sw_power_cap": ("power limit", "The card asked for more power than its limit allows. Raising the "
-                                        "power limit in a tuning tool, or improving airflow, gives it back."),
-        "hw_slowdown": ("hardware slowdown", "A hardware protection engaged — temperature, power brake, or "
-                                             "a fast trigger. Check temperatures and the power connector."),
-        "hw_thermal_slowdown": ("hardware thermal slowdown", "The card hit its hardware temperature limit. "
-                                                             "This is airflow, dust, or dried thermal paste."),
-        "sw_thermal_slowdown": ("thermal", "The driver reduced clocks to stay within temperature."),
-        "hw_power_brake_slowdown": ("external power brake", "The power supply asserted a brake. This is a "
-                                                            "power delivery problem, not a GPU problem."),
+    fixes = {
+        "sw_power_cap": "The card asked for more power than its limit allows. Raising the "
+                       "power limit in a tuning tool, or improving airflow, gives it back.",
+        "hw_slowdown": "A hardware protection engaged — temperature, power brake, or "
+                      "a fast trigger. Check temperatures and the power connector.",
+        "hw_thermal_slowdown": "The card hit its hardware temperature limit. "
+                               "This is airflow, dust, or dried thermal paste.",
+        "sw_thermal_slowdown": "The driver reduced clocks to stay within temperature.",
+        "hw_power_brake_slowdown": "The power supply asserted a brake. This is a "
+                                   "power delivery problem, not a GPU problem.",
     }
     found = []
-    for flag, (label, fix) in labels.items():
+    for flag, label in THROTTLE_LABELS.items():
+        fix = fixes[flag]
         active = [s for s in trace.gpu if s.throttle.get(flag)]
         if not active or len(active) / len(trace.gpu) < THROTTLE_SHARE:
             continue
@@ -298,3 +314,31 @@ def vram(trace: Trace, sources: dict) -> List[Finding]:
         heuristic=not spill,
         source=sources["methods"]["gpu_busy"]["url"] if not spill else None,
     )]
+
+
+def background_gpu(trace: Trace) -> List[Finding]:
+    """A process other than the one being captured, using enough of the
+    GPU's 3D engine to be worth knowing about (D-0020) — a browser,
+    Discord, OBS, a second monitor's compositor doing more than its share.
+    No published source to cite here: this is a direct per-process reading,
+    not a judgement call against a documented threshold like the others in
+    this module, so it carries no `source=` and is not marked heuristic."""
+    if not trace.gpu_engine:
+        return []
+    target = (trace.target or "").lower()
+    found = []
+    for entry in trace.gpu_engine:
+        name = entry.get("name") or ""
+        if not name or name.lower() == target:
+            continue
+        util = entry.get("median_util_percent")
+        if util is None or util < BACKGROUND_GPU_SHARE:
+            continue
+        found.append(Finding(
+            severity="medium",
+            title=f"{name} was also using the graphics card — {round(util)}% of its 3D engine, on median",
+            evidence=[f"pid {entry.get('pid')}", "sampled once a second, same as the other counters here"],
+            fix="Close it, or check its hardware-acceleration/overlay settings, if you want the "
+                "GPU fully available to the game.",
+        ))
+    return found

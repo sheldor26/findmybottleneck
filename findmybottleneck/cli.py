@@ -30,6 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--launch", help="path to the game's .exe; findmybottleneck starts it for you")
     capture.add_argument("--wait-timeout", type=float, default=120.0,
                           help="seconds to wait for the process to appear before recording anyway (0 disables waiting)")
+    capture.add_argument("--notes", default="",
+                          help="tag this capture with the in-game settings used, or anything else "
+                               "worth remembering when reading this trace again later")
 
     explain = sub.add_parser("explain", help="read a trace and print the verdict")
     explain.add_argument("trace", nargs="?", default="bottleneck-trace.json")
@@ -50,8 +53,17 @@ def build_parser() -> argparse.ArgumentParser:
                           help="how many recent seconds of frames the live verdict is judged from")
     overlay.add_argument("--refresh-ms", type=int, default=1000,
                           help="how often the on-screen text is updated")
+    overlay.add_argument("--log",
+                          help="also append every refresh's verdict, with a timestamp, to this file — "
+                               "so you can look back at what it said after a stutter, not just "
+                               "while looking at the screen")
 
     check = sub.add_parser("check", help="what findmybottleneck can and cannot read on this machine")
+
+    history = sub.add_parser(
+        "history", help="trend across every trace in a folder — is it getting worse over time?")
+    history.add_argument("folder", nargs="?", default=".", help="folder to scan for trace JSON files")
+    history.add_argument("--json", action="store_true")
 
     sub.add_parser("gui", help="a desktop window for check/capture/explain (needs: pip install findmybottleneck[gui])")
 
@@ -118,6 +130,26 @@ def main(argv=None) -> int:
             print("The GUI needs an extra: pip install findmybottleneck[gui]", file=sys.stderr)
             return 2
         launch()
+        return 0
+
+    if args.command == "history":
+        from .engine.history import os_change_note, scan, thermal_trend_note, trend_note
+        from .report import render_history
+
+        folder = Path(args.folder)
+        if not folder.is_dir():
+            print(f"no such folder: {folder}", file=sys.stderr)
+            return 2
+        entries = scan(folder)
+        note = trend_note(entries)
+        thermal_note = thermal_trend_note(entries)
+        build_note = os_change_note(entries)
+        if args.json:
+            print(json.dumps({"entries": [asdict(e) for e in entries], "trend": note,
+                              "thermal_trend": thermal_note, "os_change": build_note},
+                             indent=2, default=str))
+        else:
+            render_history(entries, note, thermal_note, build_note)
         return 0
 
     if args.command == "check":

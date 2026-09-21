@@ -43,6 +43,7 @@ class Finding:
 
 @dataclass
 class Report:
+    notes: str = ""             # whatever the capture was tagged with, e.g. --notes
     verdict: Optional[Verdict] = None
     secondary: List[Verdict] = field(default_factory=list)
     findings: List[Finding] = field(default_factory=list)
