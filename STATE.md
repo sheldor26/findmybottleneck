@@ -46,6 +46,14 @@ updated: 2026-09-21
   write into, rather than a renderer built from scratch (D-0012). `rtss.py`
   is the new module; its byte-level protocol code is unit tested, its actual
   OS-level shared memory access is not (see **In flight**).
+- `findmybottleneck gui` — a desktop window (`gui/app.py` +
+  `gui/report_view.py`), optional (`pip install findmybottleneck[gui]`,
+  D-0013), the project's first GUI and first new dependency. Three tabs —
+  Check, Capture (with a progress bar), Report (as cards, not monospace) —
+  driving the exact same `collect.windows.check_status`/`run_capture` and
+  `engine.judge` the CLI already calls; `check()`/`capture()` were each split
+  into a data-returning core and a thin CLI printer so both callers share one
+  implementation.
 
 ## In flight
 
@@ -72,6 +80,13 @@ updated: 2026-09-21
   not fixed. These are all bounded concurrency/proof-limit gaps (D-0012) — a
   torn or overwritten status line, self-correcting on the next refresh — not
   the unbounded cross-slot corruption the geometry validation closes.
+- **The GUI has never been looked at.** It imports and builds without error,
+  and its Report tab was checked against `report.py`'s own structure, but no
+  one has actually seen the window — the user declined screen-control access
+  when it was offered this session. Colours, layout, hover behaviour, whether
+  the progress bar reads well: all unverified. `python3 -m findmybottleneck
+  gui` (after `pip install findmybottleneck[gui]`) is the one thing that
+  would settle it.
 
 ## Next
 
@@ -95,7 +110,10 @@ updated: 2026-09-21
    is readable via typeperf without admin rights, but the instances are keyed
    by PID and engine type and nothing here parses indexed typeperf instances
    yet — `_parse_typeperf` only reads `(_Total)` and fixed per-core columns.
-5. A wrong-GPU finding (laptop rendering on integrated graphics instead of
+5. Actually look at the GUI: run `pip install findmybottleneck[gui]` then
+   `python3 -m findmybottleneck gui`, click through all three tabs, and fix
+   whatever doesn't look or behave right. Nobody has seen it render yet.
+6. A wrong-GPU finding (laptop rendering on integrated graphics instead of
    the discrete card this trace reads) was attempted and pulled — see
    D-0011. It needs `collect/windows.py`'s GPU samples and PresentMon's
    frames to share a real, common clock, which they do not today

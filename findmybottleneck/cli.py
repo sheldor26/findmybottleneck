@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = sub.add_parser("check", help="what findmybottleneck can and cannot read on this machine")
 
+    sub.add_parser("gui", help="a desktop window for check/capture/explain (needs: pip install findmybottleneck[gui])")
+
     parser.add_argument("--version", action="version", version=__version__)
     return parser
 
@@ -103,6 +105,15 @@ def main(argv=None) -> int:
             return 2
         from .collect.windows import capture as do_capture
         return do_capture(args)
+
+    if args.command == "gui":
+        try:
+            from .gui.app import launch
+        except ImportError:
+            print("The GUI needs an extra: pip install findmybottleneck[gui]", file=sys.stderr)
+            return 2
+        launch()
+        return 0
 
     if args.command == "check":
         if platform.system() != "Windows":

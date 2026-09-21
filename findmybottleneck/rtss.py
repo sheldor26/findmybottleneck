@@ -315,7 +315,10 @@ class RTSSWriter:
             # behaviour in this module that can only be confirmed on a real
             # Windows machine with RTSS actually running.
             self._mmap = mmap.mmap(-1, 0, tagname=MAPPING_NAME)
-        except (OSError, ValueError):
+        except (OSError, ValueError, TypeError):
+            # TypeError: `tagname` doesn't exist on this platform's mmap at
+            # all (anything but Windows) — RTSS is Windows-only, so this is
+            # just another shape of "not available here", not a crash.
             self._mmap = None
             return False
         if parse_header(self._read()) is None:

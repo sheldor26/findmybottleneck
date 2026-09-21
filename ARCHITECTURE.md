@@ -17,16 +17,23 @@ findmybottleneck/engine/__init__.py   judge(trace) -> Report
 findmybottleneck/verdict.py           Verdict, Finding, Report
 findmybottleneck/report.py            everything that reaches the terminal
 findmybottleneck/rtss.py              everything that reaches RTSS's on-screen display
+findmybottleneck/gui/app.py           the desktop window (optional: pip install findmybottleneck[gui])
+findmybottleneck/gui/report_view.py   everything that reaches the window
 findmybottleneck/data/sources.json    the published sentence behind every rule
 ```
 
 The line that matters runs between `collect/` and `engine/`. They never call
-each other. A capture writes a file; a verdict reads one. `rtss.py` is a third
-kind of module, neither: it never reads hardware (so it isn't `collect/`) and
-never judges (so it isn't `engine/`) — it is a sink, the live-OSD equivalent
-of `report.py`'s terminal output. `collect/windows.py::run_overlay` is the
-only thing that calls both `engine.frames.analyse` and `rtss.push` in the
-same loop, and it writes no trace file — a live view, not a capture.
+each other. A capture writes a file; a verdict reads one. `rtss.py` and
+`gui/` are a third kind of module, neither: they never read hardware (so
+they aren't `collect/`) and never judge (so they aren't `engine/`) — each is
+a sink, the same role `report.py`'s terminal output plays, just for a
+different destination (RTSS's OSD, a window). `collect/windows.py::run_overlay`
+is the only thing that calls both `engine.frames.analyse` and `rtss.push` in
+the same loop, and it writes no trace file — a live view, not a capture.
+`gui/app.py` drives `collect.windows.check_status`/`run_capture` and
+`engine.judge` exactly the way the CLI does, in a background thread so the
+window stays responsive, and hands the result to `gui/report_view.py` —
+nothing in `gui/` computes a verdict itself.
 
 ## Data
 
@@ -55,7 +62,10 @@ Nothing else is written. No database, no state directory, no history.
 
 ## Conventions
 
-- Python 3.9+, standard library only, in the tool and in the tests.
+- Python 3.9+, standard library only, in the tool and in the tests — with one
+  deliberate, opt-in exception: `gui/` needs `customtkinter` (the
+  `[gui]` extra, D-0013). Nothing else depends on it, and it is imported
+  lazily so the base install stays dependency-free.
 - Every threshold lives at the top of its module with a name and a sentence
   saying it is judgement. A verdict built on one prints itself as a judgement.
 - Every rule with a published source cites it from `data/sources.json`. A rule

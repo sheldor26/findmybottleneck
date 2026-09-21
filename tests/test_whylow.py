@@ -442,6 +442,17 @@ class RTSSSharedMemory(unittest.TestCase):
     synthetic buffer shaped like the real shared memory, the same way
     PresentMon/nvidia-smi CSVs are tested against synthetic text."""
 
+    def test_open_never_raises_even_where_mmap_has_no_tagname_support(self):
+        """mmap.mmap's `tagname` kwarg doesn't exist at all on a non-Windows
+        mmap — RTSS is Windows-only, so this platform mismatch should read as
+        just another "not available here" (`False`), never an uncaught
+        `TypeError`. Only asserts the "no crash" half: on a real Windows box
+        with RTSS actually running this legitimately returns `True`, so the
+        return value itself isn't checked here, just that it's a bool."""
+        writer = rtss.RTSSWriter()
+        self.assertIn(writer.open(), (True, False))
+        writer.close()
+
     def test_parse_header_reads_signature_and_offsets(self):
         header = rtss.parse_header(rtss_buffer(version=0x00020007))
         self.assertEqual(header.version, 0x00020007)

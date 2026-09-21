@@ -68,6 +68,7 @@ python3 -m findmybottleneck check                    # what can be read on this 
 python3 -m findmybottleneck capture cs2.exe          # record (Windows only)
 python3 -m findmybottleneck explain trace.json       # the verdict, anywhere
 python3 -m findmybottleneck overlay cs2.exe          # live rolling verdict in RTSS's OSD (Windows only)
+python3 -m findmybottleneck gui                      # desktop window (needs: pip install findmybottleneck[gui])
 python3 -m unittest discover -s tests -q   # the test suite
 node .bitacora/cli.mjs doctor              # is the logbook healthy?
 ```

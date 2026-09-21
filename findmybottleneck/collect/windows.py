@@ -20,9 +20,10 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..trace import (CpuSample, DiskSample, Frame, GpuSample, Hardware,
                      MemorySample, Trace)
@@ -91,58 +92,78 @@ def supported_throttle_prefix() -> Optional[str]:
     return None
 
 
-def check() -> int:
-    ok, missing = [], []
+@dataclass
+class CheckItem:
+    """One line of `findmybottleneck check`'s output, as data rather than a print
+    statement — so the GUI can show the same information without re-running
+    or re-parsing anything."""
+    ok: bool
+    label: str
+    detail: str = ""
+
+
+def check_status() -> List[CheckItem]:
+    """What this machine can and cannot be read for. `check()` below is the
+    only thing that prints; everything else (the CLI's own summary, the GUI's
+    Check tab) reads this list instead of re-deriving it."""
+    items: List[CheckItem] = []
 
     code, out, _ = _run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"])
     if code == 0 and out.strip():
-        ok.append(f"nvidia-smi: {out.strip().splitlines()[0]}")
+        items.append(CheckItem(True, "nvidia-smi", out.strip().splitlines()[0]))
         prefix = supported_throttle_prefix()
         if prefix:
-            ok.append(f"throttle reasons: {prefix}.*")
+            items.append(CheckItem(True, "throttle reasons", f"{prefix}.*"))
         else:
-            missing.append(("throttle reasons", "this driver exposes neither field name"))
+            items.append(CheckItem(False, "throttle reasons", "this driver exposes neither field name"))
     else:
-        missing.append(("nvidia-smi", "not found — findmybottleneck reads NVIDIA telemetry only, for now"))
+        items.append(CheckItem(False, "nvidia-smi",
+                                "not found — findmybottleneck reads NVIDIA telemetry only, for now"))
 
     if shutil.which("typeperf"):
-        ok.append("typeperf: present")
+        items.append(CheckItem(True, "typeperf", "present"))
     else:
-        missing.append(("typeperf", "not found, which is unusual on Windows"))
+        items.append(CheckItem(False, "typeperf", "not found, which is unusual on Windows"))
 
     presentmon = find_presentmon()
     if presentmon:
-        ok.append(f"PresentMon: {presentmon}")
+        items.append(CheckItem(True, "PresentMon", presentmon))
         code, out, err = _run([presentmon, "--version"], timeout=10)
         blob = (out + err).lower()
         if "performance log users" in blob or "access" in blob or "denied" in blob:
-            missing.append(("PresentMon permission", "it ran but reported a permission problem"))
+            items.append(CheckItem(False, "PresentMon permission", "it ran but reported a permission problem"))
     else:
-        missing.append(("PresentMon", "not found — download it from github.com/GameTechDev/PresentMon "
-                                      "and put PresentMon.exe next to this command, or pass --presentmon"))
+        items.append(CheckItem(False, "PresentMon",
+                                "not found — download it from github.com/GameTechDev/PresentMon "
+                                "and put PresentMon.exe next to this command, or pass --presentmon"))
 
     # Only needed for `overlay` — capture and explain work without it, so this
     # never affects the pass/fail exit code below.
     from ..rtss import RTSSWriter
     rtss_writer = RTSSWriter()
     if rtss_writer.open():
-        rtss_line = "RTSS: found (needed only for `overlay`)"
+        items.append(CheckItem(True, "RTSS", "found (needed only for `overlay`)"))
     else:
-        rtss_line = None
+        items.append(CheckItem(False, "RTSS",
+                                "not running (only needed for `overlay` — RivaTuner Statistics Server, "
+                                "free, ships with MSI Afterburner)"))
     rtss_writer.close()
 
+    return items
+
+
+def check() -> int:
+    items = check_status()
+
     print()
-    for line in ok:
-        print(f"  ok    {line}")
-    for what, why in missing:
-        print(f"  miss  {what}: {why}")
-    if rtss_line:
-        print(f"  ok    {rtss_line}")
-    else:
-        print("  miss  RTSS: not running (only needed for `overlay` — RivaTuner Statistics Server, "
-              "free, ships with MSI Afterburner)")
+    for item in items:
+        text = f"{item.label}: {item.detail}" if item.detail else item.label
+        print(f"  ok    {text}" if item.ok else f"  miss  {text}")
     print()
-    if any(w in ("PresentMon", "PresentMon permission") for w, _ in missing):
+    # RTSS is only needed for `overlay`, not capture/explain, so it never
+    # affects the pass/fail exit code — same as before this was refactored.
+    missing_labels = {item.label for item in items if not item.ok and item.label != "RTSS"}
+    if missing_labels & {"PresentMon", "PresentMon permission"}:
         print("PresentMon is the only thing that can attribute a frame to the CPU or the GPU, so")
         print("without it findmybottleneck can still find a misconfigured machine but cannot tell you what")
         print("set the pace. It needs your user to be in the Performance Log Users group. Once,")
@@ -152,7 +173,7 @@ def check() -> int:
         print()
         print("Then sign out and back in. Nothing needs Administrator after that.")
         print()
-    return 1 if missing else 0
+    return 1 if missing_labels else 0
 
 
 # ------------------------------------------------------------- collecting
@@ -324,9 +345,20 @@ def _parse_typeperf(path: Path) -> Tuple[List[CpuSample], List[DiskSample], List
     return cpu, disk, memory
 
 
-def capture(args) -> int:
-    seconds = max(5, int(args.seconds))
-    out_path = Path(args.out)
+def run_capture(process: str, seconds: int, out_path: Path,
+                presentmon_path: Optional[str] = None, keep_csv: bool = False,
+                on_progress: Optional[Callable[[float, float], None]] = None) -> Tuple[Trace, Optional[Path]]:
+    """Record a trace and write it to `out_path`. Returns the trace, and the
+    workdir the raw CSVs were kept in if `keep_csv` was set (else `None`).
+
+    This is the whole body of what used to be `capture(args)` — the CLI
+    below is now a thin wrapper that prints what it always printed, and the
+    GUI is another caller that drives the same recording with its own
+    progress bar instead of a `\\r`-overwritten countdown. No new subprocess
+    logic, no new parsing: this and `capture()` are one implementation.
+    """
+    seconds = max(5, int(seconds))
+    out_path = Path(out_path)
     workdir = out_path.parent / f".fmb-{int(time.time())}"
     workdir.mkdir(parents=True, exist_ok=True)
 
@@ -338,21 +370,18 @@ def capture(args) -> int:
     if not prefix:
         missing["throttle reasons"] = "this driver exposes neither clocks_event_reasons nor clocks_throttle_reasons"
 
-    presentmon = find_presentmon(getattr(args, "presentmon", None))
-    target = args.process or ""
+    presentmon = find_presentmon(presentmon_path)
+    target = process or ""
     if not presentmon:
         missing["frame attribution"] = "PresentMon was not found, so nothing could attribute a frame to the CPU or GPU"
     elif not target:
         missing["frame attribution"] = "no process was given: findmybottleneck capture <game.exe>"
 
     gpu_csv, cpu_csv, frames_csv = workdir / "gpu.csv", workdir / "cpu.csv", workdir / "frames.csv"
-    workers = []
-
-    if prefix or True:
-        workers.append(subprocess.Popen(
-            ["nvidia-smi", f"--query-gpu={_gpu_query(prefix)}",
-             "--format=csv,noheader,nounits", "-lms", "500", "-f", str(gpu_csv)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    workers = [subprocess.Popen(
+        ["nvidia-smi", f"--query-gpu={_gpu_query(prefix)}",
+         "--format=csv,noheader,nounits", "-lms", "500", "-f", str(gpu_csv)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)]
 
     workers.append(subprocess.Popen(
         ["typeperf", *CPU_COUNTERS, "-si", "1", "-sc", str(seconds), "-f", "CSV", "-o", str(cpu_csv), "-y"],
@@ -365,13 +394,11 @@ def capture(args) -> int:
              "--terminate_after_timed", "--output_file", str(frames_csv), "--no_top"],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 
-    print(f"recording {seconds}s" + (f" of {target}" if target else "") + " — play normally")
     started = time.time()
     while time.time() - started < seconds:
         time.sleep(0.5)
-        left = int(seconds - (time.time() - started))
-        print(f"\r  {left:>3}s left ", end="", flush=True)
-    print("\r" + " " * 20 + "\r", end="")
+        if on_progress:
+            on_progress(time.time() - started, seconds)
 
     for worker in workers:
         worker.terminate()
@@ -409,15 +436,36 @@ def capture(args) -> int:
     trace.missing = missing
     trace.write(out_path)
 
-    if getattr(args, "keep_csv", False):
+    if keep_csv:
+        return trace, workdir
+    shutil.rmtree(workdir, ignore_errors=True)
+    return trace, None
+
+
+def capture(args) -> int:
+    seconds = max(5, int(args.seconds))
+    target = args.process or ""
+    print(f"recording {seconds}s" + (f" of {target}" if target else "") + " — play normally")
+
+    def on_progress(elapsed: float, total: float) -> None:
+        left = int(total - elapsed)
+        print(f"\r  {left:>3}s left ", end="", flush=True)
+
+    trace, workdir = run_capture(
+        target, seconds, Path(args.out),
+        presentmon_path=getattr(args, "presentmon", None),
+        keep_csv=getattr(args, "keep_csv", False),
+        on_progress=on_progress,
+    )
+    print("\r" + " " * 20 + "\r", end="")
+
+    if workdir is not None:
         print(f"raw csv kept in {workdir}")
-    else:
-        shutil.rmtree(workdir, ignore_errors=True)
 
     print(f"{len(trace.frames)} frames, {len(trace.gpu)} gpu samples, {len(trace.cpu)} counter samples")
-    print(f"written to {out_path}")
+    print(f"written to {args.out}")
     print()
-    print(f"  findmybottleneck explain {out_path}")
+    print(f"  findmybottleneck explain {args.out}")
     print()
     return 0
 

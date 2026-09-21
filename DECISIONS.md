@@ -9,6 +9,60 @@
 > Add entries with: `node .bitacora/cli.mjs new decision "Title" --tags area`
 
 <!-- bitacora:entry
+id: D-0013
+date: 2026-09-21
+tags: [design]
+-->
+### Add a desktop GUI, opt-in, on top of the same functions the CLI already calls
+
+**Context.** Juan asked for a modern interface — buttons with hover, intuitive, not the
+terminal. Asked to clarify the format (a browser report, a web dashboard, or
+a native app) and then the framework, he chose a native desktop window built
+with CustomTkinter: modern flat look and hover states out of the box, a
+small dependency, and light enough to eventually bundle as a single .exe for
+this tool's actual audience — someone who wants to play, not install Python.
+Both were his calls, not decided unilaterally, matching this project's own
+non-negotiable #1.
+
+**Decision.** Add `findmybottleneck/gui/` (`app.py` for the window, `report_view.py` for
+rendering) as a new dependency behind an optional extra —
+`pip install findmybottleneck[gui]` — with `customtkinter` absent from the
+base `dependencies` list and imported lazily, only inside the `gui`
+subcommand's handler in `cli.py`. Running `capture`/`explain`/`compare`/
+`overlay`/`check` never touches it. The window covers the full flow (check
+this machine, start a capture with a progress bar, see the verdict as
+cards) by calling the exact same functions the CLI does — nothing new was
+built underneath it. `collect/windows.py::check()` and `capture()` were each
+split into a data-returning core (`check_status()`, `run_capture()`) and a
+thin CLI wrapper that prints exactly what it always printed; the GUI is a
+second caller of the same core, driving its own progress bar instead of a
+`\r`-overwritten countdown, the same split `run_overlay` already used for
+its own progress reporting. `gui/report_view.py` mirrors `report.py`'s
+structure (verdict headline, evidence, findings in the same severity order,
+"not measured") so the two renderers can't drift apart in content, only in
+medium — neither computes anything; both read the same `Report`.
+
+**Consequences.** This is the project's first GUI and its first new dependency ever. The
+CLI's zero-dependency identity survives intact for anyone who never asked
+for a window — the `[gui]` extra is the whole difference, and it's the
+only place `customtkinter` is even imported. Splitting `check()`/`capture()`
+cost a small refactor but no duplicated subprocess logic: the GUI's Capture
+tab and the CLI's `capture` command are two thin callers of one
+`run_capture()`, so a future change to how nvidia-smi/typeperf/PresentMon
+are driven only has to happen once. The cost carried forward, honestly: the
+GUI's Capture tab reuses `run_capture`'s exact subprocess path, which is the
+same path `STATE.md` already says has never run on a real Windows machine —
+this doesn't add a second untested integration, but it doesn't remove the
+existing one either. The GUI itself (window layout, colours, hover
+behaviour) could not be screenshotted or interacted with in this session —
+the user declined screen-control access when offered — so it is verified by
+import (it builds without error) and by code review against
+`report.py`/`verdict.py`'s structure, not by looking at it. A real visual
+pass — does it actually look modern, do the cards read well, does the
+progress bar behave — is still owed and belongs in `STATE.md`'s **Next**,
+not assumed away.
+
+<!-- bitacora:entry
 id: D-0012
 date: 2026-09-21
 tags: [design]
