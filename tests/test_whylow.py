@@ -13,6 +13,7 @@ stay silent.
 from __future__ import annotations
 
 import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from findmybottleneck import rtss
 from findmybottleneck.collect import windows
 from findmybottleneck.engine import SOURCES, judge
 from findmybottleneck.engine import config as cfg
@@ -28,11 +30,51 @@ from findmybottleneck.engine.frames import analyse, classify, looks_capped
 from findmybottleneck.engine.hitch import summarise
 from findmybottleneck.trace import (CpuSample, DiskSample, Frame, GpuSample, Hardware, MemorySample,
                           Trace)
+from findmybottleneck.verdict import Verdict
 
 
 def frames(count, frame_ms, gpu_ms, cpu_ms, sync=0):
     return [Frame(i * frame_ms / 1000.0, frame_ms, cpu_ms, 0.1, gpu_ms, 0.1, 1.0, 0.2, sync)
             for i in range(count)]
+
+
+def rtss_buffer(version, arr_size=8, entry_size=4608, owners=None, app_arr_offset=None,
+               app_entry_size=600, app_arr_size=256):
+    """A synthetic RTSS shared-memory buffer: the 9-DWORD header followed by
+    `arr_size` OSD slots, each `entry_size` bytes (real RTSS uses 4608 for a
+    v2.7+ build: szOSD[256] + szOSDOwner[256] + szOSDEx[4096]).
+
+    `app_arr_offset` defaults to the value a genuine header always has —
+    `arrApp` sits immediately after `arrOSD` — since `parse_header` now
+    checks that the two agree; pass an explicit value to build a header that
+    fails that check on purpose."""
+    owners = owners or {}
+    osd_arr_offset = struct.calcsize("<9I")
+    if app_arr_offset is None:
+        app_arr_offset = osd_arr_offset + arr_size * entry_size
+    header = struct.pack(
+        "<9I", rtss.SIGNATURE, version,
+        app_entry_size, app_arr_offset, app_arr_size,
+        entry_size, osd_arr_offset, arr_size, 0)
+    body = bytearray(entry_size * arr_size)
+    for index, owner in owners.items():
+        base = index * entry_size
+        owner_bytes = owner.encode("ascii")
+        body[base + rtss.OSD_OWNER_OFFSET:base + rtss.OSD_OWNER_OFFSET + len(owner_bytes)] = owner_bytes
+    return bytes(header) + bytes(body)
+
+
+def rtss_raw_header(version, entry_size=4608, arr_size=8, app_arr_offset=None,
+                    app_entry_size=600, app_arr_size=256):
+    """Just the 36-byte header, for tests that only need to check whether
+    `parse_header` accepts or rejects a given geometry — no slot body is
+    allocated, so this is safe to call with a huge or zero `entry_size`/
+    `arr_size` without trying to build gigabytes of test data."""
+    osd_arr_offset = struct.calcsize("<9I")
+    if app_arr_offset is None:
+        app_arr_offset = osd_arr_offset + arr_size * entry_size
+    return struct.pack("<9I", rtss.SIGNATURE, version, app_entry_size, app_arr_offset, app_arr_size,
+                       entry_size, osd_arr_offset, arr_size, 0)
 
 
 class Sources(unittest.TestCase):
@@ -393,6 +435,139 @@ class Compare(unittest.TestCase):
     def test_too_few_frames_is_inconclusive(self):
         result = compare(Trace(frames=frames(3, 10, 9, 4)), Trace(frames=frames(200, 10, 9, 4)))
         self.assertEqual(result.agreement, "inconclusive")
+
+
+class RTSSSharedMemory(unittest.TestCase):
+    """The byte-level half of the RTSS overlay writer: tested against a
+    synthetic buffer shaped like the real shared memory, the same way
+    PresentMon/nvidia-smi CSVs are tested against synthetic text."""
+
+    def test_parse_header_reads_signature_and_offsets(self):
+        header = rtss.parse_header(rtss_buffer(version=0x00020007))
+        self.assertEqual(header.version, 0x00020007)
+        self.assertEqual(header.osd_arr_size, 8)
+        self.assertEqual(header.osd_entry_size, 4608)
+
+    def test_parse_header_rejects_a_bad_signature(self):
+        self.assertIsNone(rtss.parse_header(b"not rtss, just garbage bytes padded out to size"))
+
+    def test_parse_header_rejects_a_truncated_buffer(self):
+        self.assertIsNone(rtss.parse_header(rtss_buffer(version=0x00020007)[:10]))
+
+    def test_parse_header_rejects_a_zero_entry_size(self):
+        """The exact geometry a corrupt header needs to turn find_slot's scan
+        into a near-infinite loop over the same address (base never advances
+        when entry_size is 0) — rejected before find_slot ever sees it."""
+        self.assertIsNone(rtss.parse_header(rtss_raw_header(0x00020007, entry_size=0)))
+
+    def test_parse_header_rejects_an_absurd_slot_count(self):
+        # app_arr_offset given explicitly: the default would overflow a u32
+        # when multiplied by this arr_size, which is beside the point here.
+        header = rtss_raw_header(0x00020007, arr_size=0xFFFFFFFF, app_arr_offset=0)
+        self.assertIsNone(rtss.parse_header(header))
+
+    def test_parse_header_rejects_a_v1_header(self):
+        self.assertIsNone(rtss.parse_header(rtss_raw_header(0x00010003)))
+
+    def test_parse_header_rejects_an_entry_size_too_small_for_its_own_version(self):
+        """A header that claims v2.7 (szOSDEx present) but an entry size that
+        couldn't hold it is exactly what would make build_writes compute an
+        offset past the end of the slot."""
+        self.assertIsNone(rtss.parse_header(rtss_raw_header(0x00020007, entry_size=600)))
+
+    def test_parse_header_accepts_a_legacy_entry_size_below_the_ex_minimum(self):
+        header = rtss.parse_header(rtss_raw_header(0x00020006, entry_size=512))
+        self.assertIsNotNone(header)
+
+    def test_parse_header_rejects_an_app_array_offset_that_does_not_match_the_osd_array(self):
+        """The concrete failure a fixed-slack bound on osd_arr_offset alone
+        could not catch: a corrupt offset landing inside a neighbouring
+        slot's boundary. app_arr_offset must equal osd_arr_offset +
+        osd_arr_size * osd_entry_size in any genuine header — a corruption
+        that shifts one is not going to shift the other to match by luck."""
+        osd_arr_offset = struct.calcsize("<9I")
+        wrong_app_offset = osd_arr_offset + 8 * 512 - 256  # shifted by one owner field's width
+        header = rtss_raw_header(0x00020006, entry_size=512, arr_size=8, app_arr_offset=wrong_app_offset)
+        self.assertIsNone(rtss.parse_header(header))
+
+    def test_parse_header_rejects_a_zero_app_entry_size(self):
+        self.assertIsNone(rtss.parse_header(rtss_raw_header(0x00020007, app_entry_size=0)))
+
+    def test_find_slot_skips_slot_zero_and_prefers_the_first_free_one(self):
+        buf = rtss_buffer(version=0x00020007, owners={0: "someone-else", 2: "another-app"})
+        header = rtss.parse_header(buf)
+        # slot 0 is owned but must never be returned; slot 1 is free and comes before slot 2.
+        self.assertEqual(rtss.find_slot(buf, header, "findmybottleneck"), 1)
+
+    def test_find_slot_skips_slot_zero_even_when_slot_zero_is_free(self):
+        """Slot 0 must never be returned, not merely be less preferred —
+        this is the case an occupied-slot-0 fixture can't tell apart from a
+        find_slot that starts scanning at 0."""
+        buf = rtss_buffer(version=0x00020007)  # every slot, including 0, is free
+        header = rtss.parse_header(buf)
+        self.assertEqual(rtss.find_slot(buf, header, "findmybottleneck"), 1)
+
+    def test_find_slot_reuses_a_slot_we_already_own(self):
+        buf = rtss_buffer(version=0x00020007, owners={1: "someone-else", 3: "findmybottleneck"})
+        header = rtss.parse_header(buf)
+        self.assertEqual(rtss.find_slot(buf, header, "findmybottleneck"), 3)
+
+    def test_should_clear_is_true_only_for_our_own_slot(self):
+        buf = rtss_buffer(version=0x00020007, owners={1: "findmybottleneck", 2: "someone-else"})
+        header = rtss.parse_header(buf)
+        self.assertTrue(rtss.should_clear(buf, header, 1, "findmybottleneck"))
+        self.assertFalse(rtss.should_clear(buf, header, 2, "findmybottleneck"))
+
+    def test_find_slot_is_none_when_every_slot_is_taken(self):
+        buf = rtss_buffer(version=0x00020007, arr_size=2,
+                          owners={0: "reserved", 1: "someone-else"})
+        header = rtss.parse_header(buf)
+        self.assertIsNone(rtss.find_slot(buf, header, "findmybottleneck"))
+
+    def test_build_writes_uses_szosdex_from_v2_7_onward(self):
+        header = rtss.parse_header(rtss_buffer(version=0x00020007))
+        writes = rtss.build_writes(header, slot_index=1, owner="fmb", text="hello")
+        offsets = [offset for offset, _ in writes]
+        self.assertIn(header.osd_arr_offset + 1 * header.osd_entry_size + rtss.OSD_EX_TEXT_OFFSET, offsets)
+
+    def test_build_writes_falls_back_to_szosd_below_v2_7(self):
+        header = rtss.parse_header(rtss_buffer(version=0x00020006, entry_size=600))
+        writes = rtss.build_writes(header, slot_index=1, owner="fmb", text="hello")
+        offsets = [offset for offset, _ in writes]
+        self.assertIn(header.osd_arr_offset + 1 * header.osd_entry_size + rtss.OSD_TEXT_OFFSET, offsets)
+        self.assertNotIn(header.osd_arr_offset + 1 * header.osd_entry_size + rtss.OSD_EX_TEXT_OFFSET, offsets)
+
+    def test_build_writes_truncates_long_text_without_overflowing_the_slot(self):
+        header = rtss.parse_header(rtss_buffer(version=0x00020007))
+        writes = rtss.build_writes(header, slot_index=1, owner="fmb", text="x" * 10_000)
+        base = header.osd_arr_offset + 1 * header.osd_entry_size
+        for offset, data in writes:
+            # every write must land, start to end, inside this one slot.
+            self.assertGreaterEqual(offset, base)
+            self.assertLessEqual(offset + len(data), base + header.osd_entry_size)
+        text_offset, text_bytes = writes[-1]
+        self.assertEqual(len(text_bytes), rtss.OSD_EX_TEXT_MAX + 1)  # + the NUL
+
+    def test_build_writes_truncates_a_long_owner_too(self):
+        header = rtss.parse_header(rtss_buffer(version=0x00020007))
+        writes = rtss.build_writes(header, slot_index=1, owner="o" * 10_000, text="hi")
+        owner_offset, owner_bytes = writes[0]
+        self.assertEqual(len(owner_bytes), rtss.OSD_OWNER_MAX + 1)  # + the NUL
+
+    def test_format_status_before_enough_frames(self):
+        self.assertIn("warming up", rtss.format_status(None, {}, frame_count=3))
+
+    def test_format_status_for_gpu_bound(self):
+        verdict = Verdict(limiter="gpu", headline="", share=0.92)
+        text = rtss.format_status(verdict, {"median_fps": 144, "low1_fps": 121}, frame_count=90)
+        self.assertIn("GPU-bound", text)
+        self.assertIn("144fps", text)
+
+    def test_format_status_for_a_frame_cap(self):
+        verdict = Verdict(limiter="frame-cap", headline="", share=1.0)
+        text = rtss.format_status(verdict, {"median_fps": 60}, frame_count=90)
+        self.assertIn("capped", text)
+        self.assertNotIn("GPU-bound", text)
 
 
 if __name__ == "__main__":

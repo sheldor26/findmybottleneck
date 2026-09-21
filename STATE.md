@@ -40,6 +40,12 @@ updated: 2026-09-21
   first verdict, with an honest "inconclusive" for frame-cap, mixed, stall or
   unknown results. Surfaced as a hint under any gpu/cpu verdict so it is
   discoverable without reading `--help`.
+- `findmybottleneck overlay <game.exe>`, pushing a live rolling verdict (not
+  raw FPS/GPU%/CPU%, which every other overlay already shows) into RTSS's
+  on-screen display — the same shared-memory API MSI Afterburner and HWiNFO
+  write into, rather than a renderer built from scratch (D-0012). `rtss.py`
+  is the new module; its byte-level protocol code is unit tested, its actual
+  OS-level shared memory access is not (see **In flight**).
 
 ## In flight
 
@@ -47,6 +53,25 @@ updated: 2026-09-21
   field names and parses text shaped like the real output, but no line of it
   has executed on a Windows machine. That is the one thing a test suite here
   cannot settle.
+- **`rtss.py` has never talked to a real RTSS.** Its byte-offset math is unit
+  tested against a synthetic buffer, and `parse_header` rejects corrupt or
+  undersized geometry, including a single corrupted offset/size/count field,
+  via a cross-consistency check between two independently-advertised header
+  fields rather than a guessed slack bound (four `/trio-auditor` rounds,
+  pre-ship, each catching what the previous fix missed — D-0012). That check
+  has a stated, deliberate limit: it cannot prove the geometry is genuine
+  against a header with several fields corrupted *together* in a way chosen
+  to keep the equation true — round four demonstrated exactly that, and
+  closing it for real needs a live RTSS to check against, which isn't
+  available here. It does close the realistic case, a single accidental
+  corrupted field. Separately: whether `mmap.mmap(-1, 0, tagname=...)`
+  actually opens RTSS's real shared memory at its real size, and whether a
+  written OSD slot actually renders, is still unverified. Also separate: no
+  `dwBusy` spin-lock (RTSS v2.14+), and `close()`'s read-then-clear has a
+  real if narrow TOCTOU window against another writer's process — disclosed,
+  not fixed. These are all bounded concurrency/proof-limit gaps (D-0012) — a
+  torn or overwritten status line, self-correcting on the next refresh — not
+  the unbounded cross-slot corruption the geometry validation closes.
 
 ## Next
 
@@ -54,18 +79,23 @@ updated: 2026-09-21
    `findmybottleneck capture <game.exe> --keep-csv`. The raw CSVs are the point — the
    headers will say whether the column names, the throttle field name and the
    typeperf counter paths are what the documentation claims.
-2. DPC/ISR latency (the method LatencyMon uses): a driver holding the CPU in
+2. One real `findmybottleneck overlay <game.exe>` session against a running RTSS —
+   the other half of item 1's "never run for real". Settles whether
+   `RTSSWriter.open()` actually finds the mapping, whether the written text
+   actually appears on screen, and whether RTSS's version on a real install
+   is old enough that `szOSDEx` (v2.7+) is never used in practice.
+3. DPC/ISR latency (the method LatencyMon uses): a driver holding the CPU in
    an interrupt handler too long causes exactly the stutter this tool already
    tries to explain in the hitch breakdown, and today it cannot see it —
    `engine/hitch.py` only looks at GPU, disk and memory samples. Needs an ETW
    kernel-logger capture (`xperf` or the Windows Performance Recorder), which
    is a new collection dependency, not just a new engine rule.
-3. Per-process `GPU Engine` counters, to catch a background app (a browser,
+4. Per-process `GPU Engine` counters, to catch a background app (a browser,
    Discord, OBS) competing for the 3D engine while the game runs. The counter
    is readable via typeperf without admin rights, but the instances are keyed
    by PID and engine type and nothing here parses indexed typeperf instances
    yet — `_parse_typeperf` only reads `(_Total)` and fixed per-core columns.
-4. A wrong-GPU finding (laptop rendering on integrated graphics instead of
+5. A wrong-GPU finding (laptop rendering on integrated graphics instead of
    the discrete card this trace reads) was attempted and pulled — see
    D-0011. It needs `collect/windows.py`'s GPU samples and PresentMon's
    frames to share a real, common clock, which they do not today

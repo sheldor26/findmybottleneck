@@ -16,11 +16,17 @@ findmybottleneck/engine/compare.py    a second trace confirms or contradicts the
 findmybottleneck/engine/__init__.py   judge(trace) -> Report
 findmybottleneck/verdict.py           Verdict, Finding, Report
 findmybottleneck/report.py            everything that reaches the terminal
+findmybottleneck/rtss.py              everything that reaches RTSS's on-screen display
 findmybottleneck/data/sources.json    the published sentence behind every rule
 ```
 
 The line that matters runs between `collect/` and `engine/`. They never call
-each other. A capture writes a file; a verdict reads one.
+each other. A capture writes a file; a verdict reads one. `rtss.py` is a third
+kind of module, neither: it never reads hardware (so it isn't `collect/`) and
+never judges (so it isn't `engine/`) — it is a sink, the live-OSD equivalent
+of `report.py`'s terminal output. `collect/windows.py::run_overlay` is the
+only thing that calls both `engine.frames.analyse` and `rtss.push` in the
+same loop, and it writes no trace file — a live view, not a capture.
 
 ## Data
 

@@ -121,11 +121,26 @@ def check() -> int:
         missing.append(("PresentMon", "not found — download it from github.com/GameTechDev/PresentMon "
                                       "and put PresentMon.exe next to this command, or pass --presentmon"))
 
+    # Only needed for `overlay` — capture and explain work without it, so this
+    # never affects the pass/fail exit code below.
+    from ..rtss import RTSSWriter
+    rtss_writer = RTSSWriter()
+    if rtss_writer.open():
+        rtss_line = "RTSS: found (needed only for `overlay`)"
+    else:
+        rtss_line = None
+    rtss_writer.close()
+
     print()
     for line in ok:
         print(f"  ok    {line}")
     for what, why in missing:
         print(f"  miss  {what}: {why}")
+    if rtss_line:
+        print(f"  ok    {rtss_line}")
+    else:
+        print("  miss  RTSS: not running (only needed for `overlay` — RivaTuner Statistics Server, "
+              "free, ships with MSI Afterburner)")
     print()
     if any(w in ("PresentMon", "PresentMon permission") for w, _ in missing):
         print("PresentMon is the only thing that can attribute a frame to the CPU or the GPU, so")
@@ -404,4 +419,75 @@ def capture(args) -> int:
     print()
     print(f"  findmybottleneck explain {out_path}")
     print()
+    return 0
+
+
+def run_overlay(args) -> int:
+    """Push a live rolling verdict into RTSS's on-screen display.
+
+    Unlike ``capture``, this never stops on its own and writes no trace file
+    — it is a live view, not a capture. It reuses PresentMon and the existing
+    CSV parser exactly as ``capture`` does; the only new thing is that
+    PresentMon runs open-ended (no ``--timed``) and the CSV is re-read on a
+    short interval instead of once at the end.
+    """
+    from ..engine.frames import analyse
+    from ..rtss import RTSSWriter, format_status
+
+    presentmon = find_presentmon(getattr(args, "presentmon", None))
+    target = args.process
+    if not presentmon:
+        print("PresentMon was not found — findmybottleneck check says where to get it.", file=sys.stderr)
+        return 2
+
+    writer = RTSSWriter()
+    if not writer.open():
+        print("Could not reach RTSS's shared memory — is RTSS (RivaTuner Statistics Server) running?",
+              file=sys.stderr)
+        return 2
+
+    # Everything from here on must run inside try/finally: writer.open()
+    # already succeeded, so a mapped RTSS slot exists and has to be released
+    # on the way out even if PresentMon fails to start or Ctrl+C lands before
+    # the loop begins. workdir/presentmon_worker are initialised as the very
+    # first statements inside the try, not before it, so there is no gap
+    # between "a slot is claimed" and "a KeyboardInterrupt is caught".
+    try:
+        workdir = None
+        presentmon_worker = None
+        workdir = Path.cwd() / f".fmb-overlay-{int(time.time())}"
+        workdir.mkdir(parents=True, exist_ok=True)
+        frames_csv = workdir / "frames.csv"
+
+        presentmon_worker = subprocess.Popen(
+            [presentmon, "--process_name", target, "--output_file", str(frames_csv), "--no_top"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+
+        window_s = float(getattr(args, "window_seconds", 3.0))
+        refresh_s = max(0.1, int(getattr(args, "refresh_ms", 1000)) / 1000.0)
+        min_frames = 10
+
+        print(f"pushing a live verdict for {target} into RTSS — Ctrl+C to stop")
+        while True:
+            time.sleep(refresh_s)
+            all_frames = _parse_presentmon(frames_csv) if frames_csv.exists() else []
+            recent = []
+            if all_frames:
+                latest = all_frames[-1].time
+                recent = [f for f in all_frames if f.time >= latest - window_s]
+            verdict, _, stats, _ = analyse(recent) if len(recent) >= min_frames else (None, [], {}, [])
+            writer.push(format_status(verdict, stats, len(recent), min_frames))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if presentmon_worker is not None:
+            presentmon_worker.terminate()
+            try:
+                presentmon_worker.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                presentmon_worker.kill()
+        writer.close()
+        if workdir is not None:
+            shutil.rmtree(workdir, ignore_errors=True)
+        print("\nstopped")
     return 0

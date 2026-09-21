@@ -37,6 +37,15 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("after", help="a capture taken after lowering resolution or in-game settings")
     compare.add_argument("--json", action="store_true")
 
+    overlay = sub.add_parser(
+        "overlay", help="push a live rolling verdict into RTSS's on-screen display (Windows only, needs RTSS running)")
+    overlay.add_argument("process", help="the game's executable, e.g. cs2.exe")
+    overlay.add_argument("--presentmon", help="path to PresentMon.exe, if it is not on PATH")
+    overlay.add_argument("--window-seconds", type=float, default=3.0,
+                          help="how many recent seconds of frames the live verdict is judged from")
+    overlay.add_argument("--refresh-ms", type=int, default=1000,
+                          help="how often the on-screen text is updated")
+
     check = sub.add_parser("check", help="what findmybottleneck can and cannot read on this machine")
 
     parser.add_argument("--version", action="version", version=__version__)
@@ -77,6 +86,13 @@ def main(argv=None) -> int:
         else:
             render_compare(result)
         return 0
+
+    if args.command == "overlay":
+        if platform.system() != "Windows":
+            print("overlay only runs on Windows — it needs RTSS, which is Windows-only.", file=sys.stderr)
+            return 2
+        from .collect.windows import run_overlay
+        return run_overlay(args)
 
     if args.command == "capture":
         if platform.system() != "Windows":

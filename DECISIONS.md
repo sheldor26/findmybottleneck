@@ -9,6 +9,139 @@
 > Add entries with: `node .bitacora/cli.mjs new decision "Title" --tags area`
 
 <!-- bitacora:entry
+id: D-0012
+date: 2026-09-21
+tags: [design]
+-->
+### Feed RTSS's overlay instead of building one
+
+**Context.** Juan asked for an "overlay estilo FPS monitor". The same transcripts folder that
+led to D-0010 also confirmed what everyone in that space actually uses for
+this: RivaTuner Statistics Server (RTSS) — the engine MSI Afterburner and
+HWiNFO both write into via its public shared-memory API, not something they
+each reimplement. Building a real overlay from scratch means hooking
+DirectX/Vulkan/OpenGL inside someone else's game process — a project the
+size of RTSS itself (which has been doing exactly that since 2011), fragile
+across graphics-API versions, and redundant with software the audience this
+tool targets almost certainly already has installed for free. Given three
+options (feed RTSS, a non-overlay live terminal dashboard, build a renderer
+from scratch), Juan chose feeding RTSS.
+
+**Decision.** Add `rtss.py`, a from-scratch Python implementation of RTSS's shared-memory
+client protocol (`RTSSSharedMemoryV2`), researched from Unwinder's publicly
+distributed `RTSSSharedMemory.h` (cross-checked against two independent
+mirrors and a reference C++/CLI implementation — no prior Python port was
+found anywhere). Split the same way the rest of this project splits real I/O
+from reasoning about it: `parse_header`/`find_slot`/`build_writes` are pure
+functions tested against a synthetic buffer shaped like the real shared
+memory; only `RTSSWriter` touches the actual OS-level mapping, and that half
+is untested here, exactly like the rest of the Windows collector.
+`collect/windows.py::run_overlay` reuses `find_presentmon` and
+`_parse_presentmon` unchanged, running PresentMon open-ended instead of
+timed, and feeds `engine/frames.py::analyse`'s existing rolling verdict — not
+raw FPS/GPU%/CPU%, which RTSS/Afterburner/HWiNFO already show — into the OSD
+every `--refresh-ms`. `findmybottleneck check` gained one more line (RTSS
+found or not), informational only, since it is not needed for `capture` or
+`explain`.
+
+**Consequences.** The differentiator survives into the live view: every other overlay in this
+space shows numbers, this one is the only one that says *why* — "GPU-bound",
+"CPU-bound", a frame cap — recomputed from a short rolling window instead of
+once per capture. `rtss.py`'s byte-offset arithmetic is a different kind of
+risk than everything else in `engine/`: a mistake there is not a wrong
+verdict, it is memory corruption in a shared segment RTSS itself and every
+other app writing into it also depends on — the reason it got a
+correctness-focused `/trio-auditor` pass (M-0001's guardrail) before being
+called done, rather than only unit tests.
+
+Three `/trio-auditor` rounds were needed, and each one found something real
+the previous fix had missed — worth recording precisely, not smoothed into
+"eventually passed."
+
+Round one: `parse_header` trusted whatever `osd_entry_size`/`osd_arr_size`
+the shared memory advertised, which meant a corrupt or unexpected header
+(`entry_size == 0`, an absurd slot count, an entry too small for the version
+it claims) could turn `find_slot`'s scan into a nine-figure loop, or make
+`build_writes` compute an offset past a slot's real boundary and into the
+next one; `RTSSWriter._write` had no bounds check or exception handling
+around a write landing outside the mapped view; `close()` cleared its cached
+slot unconditionally. Fixed by validating geometry once in `parse_header` (a
+header that fails is treated exactly like a missing mapping), catching write
+failures in `_write`, and adding `should_clear` to recheck ownership before
+clearing.
+
+Round two: `parse_header` validated `osd_entry_size`/`osd_arr_size` but not
+`osd_arr_offset` itself — an offset that is wrong but still lands inside the
+mapping (e.g. pointing 1000 bytes past the real array) sailed through every
+check and would have redirected a "safe" write into a neighbouring slot
+without ever exceeding the mapping's real length. First attempt: a fixed
+slack bound, `MAX_HEADER_GROWTH`, on how far past the header the array could
+legitimately start. Also: `should_clear` only distinguished owner strings,
+not writer *processes* — two `overlay` runs sharing the fixed string
+`"findmybottleneck"` racing for the same slot could have one erase the
+other's just-written line. Fixed by qualifying the default owner with the
+process's own PID.
+
+Round three found the slack bound from round two still insufficient — a
+carefully-shifted offset within that bound could still land exactly on a
+neighbouring slot's boundary, so an arbitrary number was never going to be
+enough. Replaced with an invariant instead of a guessed constant: RTSS's own
+layout places `arrApp` immediately after `arrOSD`, so a genuine header's
+`app_arr_offset` always equals `osd_arr_offset + osd_arr_size *
+osd_entry_size` — two independently-advertised fields that agree by
+construction in a real header, which rejects any *single*-field corruption
+of the three involved. Round three also caught this entry's own draft
+overclaiming ("both auditors gave GO") before the round that would have
+justified saying so had even returned, and a class-docstring claim that the
+PID-based owner makes "each running instance" distinct, when it only
+distinguishes *processes* — two `RTSSWriter` objects built in the same
+process would still share a default owner (nothing in this codebase does
+that today, but the docstring said more than the code guarantees). Both
+corrected to say only what is true.
+
+Round four (Codex) showed the consistency check itself is not a closed
+proof: a header with `osd_arr_offset`, `osd_arr_size` and `osd_entry_size`
+corrupted *together*, chosen so the same equation still holds, passes every
+check here while every slot address computed from it is wrong. This is not
+a bug to patch — it is the actual limit of what an algebraic
+self-consistency check, run entirely on data that might itself be the thing
+that's corrupt, can prove. Closing it for real would need a reference
+outside the shared memory (a live RTSS to check against), which this module
+does not have and cannot get without a real Windows machine running RTSS.
+The decision here, after four rounds, is to stop patching and say precisely
+what the check does and does not guarantee, in the code and in this entry,
+rather than attempt a fifth algebraic refinement of an approach that cannot
+reach a proof by construction: it turns a single accidental bit-flip or
+partial write — a corrupt-but-not-adversarial header, this project's actual
+threat model, the same one D-0004 and D-0009 already draw the line at — from
+silently accepted into rejected with overwhelming probability. It does not,
+and structurally cannot, defend against a header deliberately and
+coherently rewritten across three fields at once. That is a materially
+different, much narrower claim than "closes the wrong-in-bounds-offset
+class", and the module docstring now says exactly that, not the stronger
+thing.
+
+What is still open, honestly, not softened: `close()`'s read-then-write
+(`should_clear` then `build_clear`) remains a real TOCTOU window against a
+*different process* — if another writer takes over this exact slot in the
+instant between the check and the clear, `close()` would still erase it.
+This is the same category as the missing `dwBusy` spin-lock (RTSS v2.14+
+documents one; this does not implement it — a guessed-at locking protocol,
+unverifiable against a real RTSS, risks acquiring a lock and never releasing
+it, which freezes the OSD for every client, a worse failure than the one
+being avoided). Both are disclosed, bounded concurrency gaps — a momentarily
+torn or overwritten status line, self-correcting a moment later — not the
+unbounded, silent cross-slot corruption the geometry-validation fix closes.
+That distinction, not "everything here is fixed," is what `STATE.md` and
+this entry are careful to state.
+
+Like the rest of the collector, none of this has run against a real, live
+RTSS instance — built against RTSS's own documented layout, the same posture
+`STATE.md` already carries for `capture`, now extended to a second untested
+integration, with the concurrency caveats above on top of that, not instead
+of it.
+
+<!-- bitacora:entry
 id: D-0011
 date: 2026-09-21
 tags: [design]
