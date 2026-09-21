@@ -9,6 +9,60 @@
 > Add entries with: `node .bitacora/cli.mjs new decision "Title" --tags area`
 
 <!-- bitacora:entry
+id: D-0011
+date: 2026-09-21
+tags: [design]
+-->
+### Attempted a wrong-GPU finding, and pulled it before shipping
+
+**Context.** Juan pointed at a folder of PC-gaming-bottleneck YouTube transcripts to see
+whether they held anything the project's own research had missed. Most of it
+was the same ground already covered, or content-farm filler recommending the
+exact calculator sites D-0007 rejects. One thing recurred across several
+transcripts and looked genuinely new: a laptop can silently render a game on
+integrated graphics instead of the discrete card, and `collect/windows.py`
+already reads the discrete card via `nvidia-smi` regardless of which GPU
+actually rendered the frame — a trace from a misconfigured laptop would show
+a card that stayed idle the whole capture, data this project was already
+gathering and not reading for this.
+
+**Decision.** Built `engine/config.py::wrong_gpu`, and ran it through the M-0001 guardrail
+(a `/trio-auditor` pass before shipping, not after) three times. Each pass
+found a real defect the previous fix hadn't closed: (1) a missing
+utilisation reading treated as 0%, and idle share computed over the whole
+capture rather than while frames were recorded; (2) fixed with a `None`
+filter and a `[min, max]` frame-time window — which the next pass showed
+compares two collectors' clocks that do not share an origin
+(`_parse_gpu`'s samples are indexed `0, 0.5, 1.0, …` from collector start;
+`_parse_presentmon`'s frames are indexed from zero at the *first captured
+frame*), so the "same window" the code assumes is not actually the same
+window in a real trace; and, independently, that the window swallows any
+mid-capture gap (a loading screen, an alt-tab) as if it were idle time in the
+supposedly-active period; (3) a GPU-busy floor meant to separate a real
+stall from a wrong-GPU laptop, which both auditors independently showed
+cuts the wrong way too: a light or capped game genuinely running on the
+wrong GPU can render fast enough that its own GPU-busy share never crosses
+the floor, silently suppressing the one case the rule exists to catch.
+
+Three rounds, three genuinely different failure shapes, each deeper than the
+last rather than converging — the opposite of what a healthy fix-and-reverify
+cycle looks like (contrast D-0008 and D-0010, each closed in one or
+two rounds). That pattern is itself the signal: the rule was not sound
+enough to fix incrementally, so it was deleted — function, constants, tests,
+and its `judge()` wiring — rather than attempting a fourth patch.
+
+**Consequences.** This is `engine/config.py`'s first pulled finding, and the guardrail did
+exactly its job: catching a rule that looked reasonable on a first read
+before it reached a real trace, not after. The underlying idea is not wrong
+— a laptop rendering on the wrong GPU is real and `collect/windows.py`'s data
+could in principle show it — but doing so honestly needs the collector's
+GPU and frame samples to share a real, common clock, which they do not today
+(D-0002's boundary means `engine/` cannot fix this by reading harder; it is
+a `collect/` problem). Revisiting this after the collector has an actual
+Windows capture to check timestamps against (`STATE.md`'s **In flight** item)
+is the earliest this should be tried again.
+
+<!-- bitacora:entry
 id: D-0010
 date: 2026-09-21
 tags: [design]

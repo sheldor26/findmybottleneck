@@ -137,6 +137,36 @@ class Configuration(unittest.TestCase):
         trace = Trace(cpu=[CpuSample(i, total=8, processor_performance=15) for i in range(10)])
         self.assertEqual(cfg.cpu_throttling(trace, SOURCES), [])
 
+    def test_a_pinned_core_is_judged_even_when_the_whole_processor_average_is_low(self):
+        """A game bound to one or two threads never pushes the _Total average past 80%."""
+        trace = Trace(cpu=[CpuSample(i, total=15, cores=[10.0, 92.0], processor_performance=55)
+                          for i in range(10)])
+        found = cfg.cpu_throttling(trace, SOURCES)
+        self.assertIn("55%", found[0].title)
+
+    def test_an_idle_processor_with_one_busy_core_but_no_throttle_is_silent(self):
+        trace = Trace(cpu=[CpuSample(i, total=15, cores=[10.0, 92.0], processor_performance=100)
+                          for i in range(10)])
+        self.assertEqual(cfg.cpu_throttling(trace, SOURCES), [])
+
+    def test_a_clock_that_settles_at_its_base_speed_is_reported_as_a_declining_trend(self):
+        """Losing turbo boost down to (not below) the nominal clock is still throttling —
+        the absolute floor can't see it, so the declining-trend check has to."""
+        boosted = [CpuSample(i, total=95, processor_performance=140) for i in range(10)]
+        settled = [CpuSample(10 + i, total=95, processor_performance=100) for i in range(10)]
+        found = cfg.cpu_throttling(Trace(cpu=boosted + settled), SOURCES)
+        self.assertEqual(found[0].severity, "medium")
+        self.assertIn("fell", found[0].title)
+
+    def test_a_steady_clock_is_not_reported_as_a_declining_trend(self):
+        trace = Trace(cpu=[CpuSample(i, total=95, processor_performance=100) for i in range(20)])
+        self.assertEqual(cfg.cpu_throttling(trace, SOURCES), [])
+
+    def test_fewer_than_six_busy_samples_is_too_few_for_a_trend(self):
+        boosted = [CpuSample(i, total=95, processor_performance=140) for i in range(2)]
+        settled = [CpuSample(2 + i, total=95, processor_performance=100) for i in range(3)]
+        self.assertEqual(cfg.cpu_throttling(Trace(cpu=boosted + settled), SOURCES), [])
+
     def test_a_narrow_link_under_load_is_reported(self):
         trace = Trace(gpu=[GpuSample(i, utilisation=97, pcie_width=4, pcie_width_max=16)
                            for i in range(10)])
@@ -162,6 +192,7 @@ class Configuration(unittest.TestCase):
     def test_vram_with_room_is_silent(self):
         trace = Trace(gpu=[GpuSample(i, memory_used=4000, memory_total=8000) for i in range(10)])
         self.assertEqual(cfg.vram(trace, SOURCES), [])
+
 
 
 class Hitches(unittest.TestCase):
@@ -301,13 +332,26 @@ class Compare(unittest.TestCase):
         after = Trace(frames=frames(200, 10.2, 4.0, 10.1))   # still cpu-bound, ~98 fps
         result = compare(before, after)
         self.assertEqual(result.agreement, "confirms")
-        self.assertIn("did not move", result.headline)
+        self.assertIn("barely moved", result.headline)
+        self.assertIn("identical captures", result.note)
+
+    def test_the_exact_tolerance_boundary_is_computed_from_unrounded_medians(self):
+        """A rounded-fps comparison can flip right at the 8% boundary; the raw one must not."""
+        # 100.04 fps -> 108.00 fps is a 7.96% rise (just inside tolerance), but both
+        # round to 100.0 and 108.0 fps, which computes as exactly 8% if rounded first —
+        # enough to flip "confirms" (cpu-bound, unchanged) into "contradicts".
+        before = Trace(frames=frames(200, 1000.0 / 100.04, 3.0, 9.9))
+        after = Trace(frames=frames(200, 1000.0 / 108.00, 3.0, 9.15))
+        result = compare(before, after)
+        self.assertEqual(result.agreement, "confirms")
+        self.assertLess(result.fps_change_pct, 0.08)
 
     def test_cpu_bound_contradicted_when_fps_jumps(self):
         before = Trace(frames=frames(200, 10.0, 4.0, 9.9))   # cpu-bound, 100 fps
         after = Trace(frames=frames(200, 5.0, 4.9, 2.0))     # fps roughly doubled
         result = compare(before, after)
         self.assertEqual(result.agreement, "contradicts")
+        self.assertIn("may not have been comparable", result.note)
 
     def test_gpu_bound_confirmed_when_fps_rises(self):
         before = Trace(frames=frames(200, 10.0, 9.9, 4.0))   # gpu-bound, 100 fps
@@ -315,12 +359,14 @@ class Compare(unittest.TestCase):
         result = compare(before, after)
         self.assertEqual(result.agreement, "confirms")
         self.assertIn("rose", result.headline)
+        self.assertIn("lighter section", result.note)
 
     def test_gpu_bound_contradicted_when_fps_stays_flat(self):
         before = Trace(frames=frames(200, 10.0, 9.9, 4.0))   # gpu-bound, 100 fps
         after = Trace(frames=frames(200, 10.1, 10.0, 4.0))   # unchanged
         result = compare(before, after)
         self.assertEqual(result.agreement, "contradicts")
+        self.assertIn("may not have been comparable", result.note)
 
     def test_a_frame_cap_is_inconclusive_rather_than_scored(self):
         before = Trace(frames=frames(200, 16.67, 6.0, 5.0, sync=1))  # 60 fps cap
@@ -328,6 +374,21 @@ class Compare(unittest.TestCase):
         result = compare(before, after)
         self.assertEqual(result.agreement, "inconclusive")
         self.assertIn("frame cap", result.headline)
+
+    def test_an_after_capture_that_lands_on_a_cap_is_also_inconclusive(self):
+        """A clean cpu-bound 'before' does not excuse an unusable 'after' — both sides count."""
+        before = Trace(frames=frames(200, 10.0, 4.0, 9.9))            # cpu-bound, 100 fps
+        after = Trace(frames=frames(200, 16.67, 6.0, 5.0, sync=1))    # coincidentally a 60 fps cap
+        result = compare(before, after)
+        self.assertEqual(result.agreement, "inconclusive")
+        self.assertIn("after capture was a frame cap", result.headline)
+
+    def test_an_after_capture_that_stalls_is_also_inconclusive(self):
+        before = Trace(frames=frames(200, 10.0, 4.0, 9.9))    # cpu-bound
+        after = Trace(frames=frames(200, 100.0, 6.0, 5.0))    # neither busy: a stall, every frame
+        result = compare(before, after)
+        self.assertEqual(result.agreement, "inconclusive")
+        self.assertIn("after capture was 'stall'", result.headline)
 
     def test_too_few_frames_is_inconclusive(self):
         result = compare(Trace(frames=frames(3, 10, 9, 4)), Trace(frames=frames(200, 10, 9, 4)))

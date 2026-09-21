@@ -9,9 +9,9 @@ to every score-ratio site because none of them ever touch the machine.
 from __future__ import annotations
 
 import statistics
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from ..trace import Trace
+from ..trace import CpuSample, Trace
 from ..verdict import Finding
 
 # Below this share of its rated speed, memory is running on a fallback default.
@@ -22,15 +22,25 @@ THROTTLE_SHARE = 0.10
 DISK_STALL_S = 0.020
 # GPU memory this close to full, with spill present, is an overflow.
 VRAM_FULL = 0.95
-# % Processor Time at or above this counts as the processor being under load —
-# below it, a low % Processor Performance is normal frequency scaling to save
-# power, not throttling, and means nothing.
+# A core (or the whole processor, if per-core figures were not collected) at
+# or above this % Processor Time counts as under load — below it, a low
+# % Processor Performance is normal frequency scaling to save power, not
+# throttling, and means nothing.
 CPU_BUSY_PERCENT = 80
 # Below this share of its rated (nominal) clock, a busy processor is being
 # held back rather than just not boosting.
 CPU_PERFORMANCE_FLOOR = 0.85
 # This share of busy samples held back is worth reporting.
 CPU_THROTTLE_SHARE = 0.20
+# Below this many busy samples, a first-half/second-half split is too small to
+# mean anything — three samples on each side is noise, not a trend. Judgement,
+# not a published rule, same as every other threshold in this file.
+CPU_MIN_SAMPLES_FOR_TREND = 6
+# A drop this large between the first and second half of the busy samples is
+# the shape of thermal throttling regardless of where it settles — this
+# catches a processor that loses turbo boost and settles at (or above) its
+# nominal clock, which CPU_PERFORMANCE_FLOOR above cannot see.
+CPU_DECLINE_SHARE = 0.15
 
 
 def _cite(trace_sources: dict, key: str) -> Dict[str, str]:
@@ -125,42 +135,104 @@ def throttling(trace: Trace, sources: dict) -> List[Finding]:
     return found
 
 
+def _busy_signal(sample: CpuSample) -> float:
+    """The busiest a single core got, or the whole-processor average if
+    per-core figures were not collected.
+
+    A whole-processor average hides a game that pins one or two threads on an
+    otherwise idle 8+ core machine: the average never crosses 80% even while
+    the threads that actually matter are saturated and possibly throttled.
+    """
+    if sample.cores:
+        return max(sample.cores)
+    return sample.total or 0.0
+
+
+def _declining_trend(busy: List[CpuSample]) -> Optional[Tuple[float, float]]:
+    """Performance settling down over the capture, regardless of where it
+    settles — the shape of thermal throttling even when it never crosses
+    below the nominal clock (a processor that loses turbo and lands back at
+    100% is still throttled, just not by CPU_PERFORMANCE_FLOOR's definition).
+    """
+    if len(busy) < CPU_MIN_SAMPLES_FOR_TREND:
+        return None
+    ordered = sorted(busy, key=lambda s: s.time)
+    half = len(ordered) // 2
+    first = statistics.median([s.processor_performance for s in ordered[:half]])
+    second = statistics.median([s.processor_performance for s in ordered[half:]])
+    if first <= 0 or (first - second) / first < CPU_DECLINE_SHARE:
+        return None
+    return first, second
+
+
 def cpu_throttling(trace: Trace, sources: dict) -> List[Finding]:
     """Every score-ratio site only ever asks the GPU whether it is throttled.
 
-    Only samples where the processor was actually busy mean anything here —
-    the same rule as the PCIe link (D-0004): a metric that is only meaningful
-    under load is judged only from samples taken under load. An idle processor
-    runs below its rated clock on purpose, to save power, and that is not a
+    Only samples where a core was actually busy mean anything here — the same
+    rule as the PCIe link (D-0004): a metric that is only meaningful under
+    load is judged only from samples taken under load. An idle processor runs
+    below its rated clock on purpose, to save power, and that is not a
     finding.
+
+    Below-nominal and declining-over-time are checked separately. A processor
+    that loses its turbo boost but settles at or above its own rated clock
+    never crosses the absolute floor, and would otherwise go unreported —
+    that gap is what the trend check closes.
+
+    Marked heuristic: the source below documents what the counter measures,
+    not that a machine below this specific floor, or declining by this
+    specific share, is thermally throttled rather than power-plan-limited or
+    something else. The fix names all of the plausible causes instead of
+    picking one.
     """
     if not trace.cpu:
         return []
     busy = [s for s in trace.cpu
-            if (s.total or 0) >= CPU_BUSY_PERCENT and s.processor_performance is not None]
+            if _busy_signal(s) >= CPU_BUSY_PERCENT and s.processor_performance is not None]
     if not busy:
         return []
+
+    fix = ("This is a processor being held back, not one with nothing to do. Check Power Options → "
+           "Processor power management → Maximum processor state (a common laptop default caps it "
+           "below 100%), and check temperatures under load — this is thermal throttling on most "
+           "laptops and small-form-factor machines.")
+
     held_back = [s for s in busy if s.processor_performance < CPU_PERFORMANCE_FLOOR * 100]
     share = len(held_back) / len(busy)
-    if share < CPU_THROTTLE_SHARE:
-        return []
-    perf = [s.processor_performance for s in held_back]
-    median_perf = round(statistics.median(perf))
-    return [Finding(
-        severity="high" if share > 0.5 else "medium",
-        title=f"Your processor is running at {median_perf}% of its rated clock while fully loaded, "
-              f"in {round(share * 100)}% of the busy samples",
-        evidence=[
-            f"{len(held_back)} of {len(busy)} samples with % Processor Time at or above "
-            f"{CPU_BUSY_PERCENT}% were below {round(CPU_PERFORMANCE_FLOOR * 100)}% of nominal performance",
-            f"median {median_perf}% of nominal, lowest {round(min(perf))}%",
-        ],
-        fix="This is a processor being held back, not one with nothing to do. Check Power Options → "
-            "Processor power management → Maximum processor state (a common laptop default caps it "
-            "below 100%), and check temperatures under load — this is thermal throttling on most "
-            "laptops and small-form-factor machines.",
-        **_cite(sources, "cpu_performance"),
-    )]
+    if share >= CPU_THROTTLE_SHARE:
+        perf = [s.processor_performance for s in held_back]
+        median_perf = round(statistics.median(perf))
+        return [Finding(
+            severity="high" if share > 0.5 else "medium",
+            title=f"Your processor is running at {median_perf}% of its rated clock under load, "
+                  f"in {round(share * 100)}% of the busy samples",
+            evidence=[
+                f"{len(held_back)} of {len(busy)} samples with a core at or above {CPU_BUSY_PERCENT}% "
+                f"busy were below {round(CPU_PERFORMANCE_FLOOR * 100)}% of nominal performance",
+                f"median {median_perf}% of nominal, lowest {round(min(perf))}%",
+            ],
+            fix=fix,
+            heuristic=True,
+            **_cite(sources, "cpu_performance"),
+        )]
+
+    trend = _declining_trend(busy)
+    if trend:
+        first, second = trend
+        drop = round((first - second) / first * 100)
+        return [Finding(
+            severity="medium",
+            title=f"Your processor's clock fell {drop}% over the course of the capture while busy",
+            evidence=[
+                f"median performance in the first half of the busy samples: {round(first)}% of nominal",
+                f"median performance in the second half: {round(second)}% of nominal",
+            ],
+            fix=fix,
+            heuristic=True,
+            **_cite(sources, "cpu_performance"),
+        )]
+
+    return []
 
 
 def pcie_link(trace: Trace, sources: dict) -> List[Finding]:

@@ -20,10 +20,11 @@ updated: 2026-09-21
 - Configuration findings: memory below its rated speed, a single module or a
   single populated channel, GPU throttling by power limit or temperature with
   the measured watts and degrees, CPU throttling (rated clock vs measured
-  clock while the processor is fully loaded — the same load-gated pattern as
-  the GPU check), graphics memory full and spilling, and a PCIe link narrower
-  or slower than the card supports — judged only from samples taken while the
-  component was busy.
+  clock under load, judged from the busiest core rather than the whole-CPU
+  average, plus a declining-trend check for a clock that settles at or above
+  its own rating — the load-gated pattern is the PCIe link's, D-0004, not the
+  GPU throttling check's, which does not gate on load), graphics memory full
+  and spilling, and a PCIe link narrower or slower than the card supports.
 - Per-hitch attribution: for every frame past twice the median, what else was
   happening at that moment, labelled coincident rather than causal, with
   "unexplained" printed as a result.
@@ -32,7 +33,7 @@ updated: 2026-09-21
 - A Windows collector that shells out to nvidia-smi, typeperf, PowerShell CIM
   and PresentMon, records every probe that fails into the trace, and bundles
   nothing.
-- 32 tests, standard library only: the engine against synthetic traces, the
+- 50 tests, standard library only: the engine against synthetic traces, the
   parsers against text shaped like what the real tools emit.
 - `findmybottleneck compare <before> <after>`, automating the community's own
   resolution-drop test: a second capture either confirms or contradicts the
@@ -64,6 +65,14 @@ updated: 2026-09-21
    is readable via typeperf without admin rights, but the instances are keyed
    by PID and engine type and nothing here parses indexed typeperf instances
    yet — `_parse_typeperf` only reads `(_Total)` and fixed per-core columns.
+4. A wrong-GPU finding (laptop rendering on integrated graphics instead of
+   the discrete card this trace reads) was attempted and pulled — see
+   D-0011. It needs `collect/windows.py`'s GPU samples and PresentMon's
+   frames to share a real, common clock, which they do not today
+   (`_parse_gpu` indexes samples from collector start; `_parse_presentmon`
+   indexes frames from the first captured frame). Worth retrying once the
+   real Windows capture (item 1 above) shows what timestamps the two
+   collectors actually produce.
 
 ## Known rough edges
 
